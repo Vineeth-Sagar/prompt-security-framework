@@ -1,17 +1,16 @@
 """POST /api/v1/input — the single entry point for all three modalities.
 
-Accepts a multipart upload (`file`) plus a `modality` form field and
-returns the normalized `InputResult` as JSON. This is the last stop
-before the input layer hands off to preprocessing (added in Phase 2) —
-nothing downstream exists yet, so this route's job for now is just
-"accept upload -> normalize -> return", with no unhandled exceptions on
-malformed input.
+Accepts a multipart upload (`file`) plus a `modality` form field, runs it
+through the matching input handler, normalizes the extracted text (Phase
+2), and returns the `InputResult` as JSON — with no unhandled exceptions
+on malformed input.
 """
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
 from app.input_layer.base import InputResult
 from app.input_layer.router import get_handler, resolve_modality
+from app.preprocessing.normalizer import normalize
 
 router = APIRouter(prefix="/api/v1", tags=["input"])
 
@@ -41,10 +40,33 @@ async def submit_input(
         content = raw
 
     try:
-        return await handler.process(content)
+        result = await handler.process(content)
     except ValueError as exc:
         # Handlers raise ValueError for application-level validation
         # failures (empty/oversized text, ...). Image/audio handlers may
         # instead raise HTTPException directly for undecodable bytes —
         # that propagates through FastAPI unchanged.
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return _apply_normalization(result)
+
+
+def _apply_normalization(result: InputResult) -> InputResult:
+    """Overwrite `result.text` with its normalized form before it leaves the API.
+
+    The lowercased form becomes the primary `text` field so every
+    downstream consumer sees the same normalized string regardless of
+    modality. The cased variant and token list aren't discarded — later
+    layers (e.g. a role-escalation detector caring about "SYSTEM:" vs
+    "system:") need them, so they're preserved under
+    `metadata["normalized"]` instead of being dropped.
+    """
+    normalized = normalize(result.text)
+
+    result.text = normalized.text
+    result.metadata["normalized"] = {
+        "text_cased": normalized.text_cased,
+        "tokens": normalized.tokens,
+    }
+
+    return result
