@@ -68,6 +68,12 @@ class ContextBuffer:
         self._window_size = window_size if window_size is not None else settings.window_size
         self._ttl_seconds = ttl_seconds if ttl_seconds is not None else settings.session_ttl_seconds
 
+    @property
+    def client(self) -> redis.Redis:
+        """The underlying Redis client — exposed for callers (e.g. tests)
+        that need to inspect state ContextBuffer's own API doesn't cover."""
+        return self._client
+
     async def add_turn(self, session_id: str, turn: TurnRecord) -> None:
         """Push `turn` onto the session's window, trim it to size, refresh TTLs.
 

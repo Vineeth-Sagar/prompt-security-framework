@@ -2,12 +2,14 @@
 
 Accepts a multipart upload (`file`) plus a `modality` form field, runs it
 through the matching input handler, normalizes the extracted text (Phase
-2), and returns the `InputResult` as JSON — with no unhandled exceptions
-on malformed input.
+2), optionally persists it as a turn in the caller's session context
+buffer (Phase 3, when `session_id` is given), and returns the
+`InputResult` as JSON — with no unhandled exceptions on malformed input.
 """
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
+from app.context_buffer.redis_buffer import ContextBuffer, TurnRecord, get_context_buffer
 from app.input_layer.base import InputResult
 from app.input_layer.router import get_handler, resolve_modality
 from app.preprocessing.normalizer import normalize
@@ -19,8 +21,15 @@ router = APIRouter(prefix="/api/v1", tags=["input"])
 async def submit_input(
     file: UploadFile = File(...),  # noqa: B008 — FastAPI's DI idiom, not a real default-call bug
     modality: str | None = Form(None),  # noqa: B008
+    session_id: str | None = Form(None),  # noqa: B008
+    buffer: ContextBuffer = Depends(get_context_buffer),  # noqa: B008
 ) -> InputResult:
-    """Route an uploaded file to the matching handler and return its InputResult."""
+    """Route an uploaded file to the matching handler and return its InputResult.
+
+    When `session_id` is provided, the normalized text is also appended
+    to that session's context buffer as a "user" turn — omit it (e.g. for
+    a one-off, sessionless request) to skip buffering entirely.
+    """
     raw = await file.read()
 
     try:
@@ -48,7 +57,12 @@ async def submit_input(
         # that propagates through FastAPI unchanged.
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    return _apply_normalization(result)
+    result = _apply_normalization(result)
+
+    if session_id:
+        await buffer.add_turn(session_id, TurnRecord(text=result.text, role="user"))
+
+    return result
 
 
 def _apply_normalization(result: InputResult) -> InputResult:

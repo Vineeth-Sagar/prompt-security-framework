@@ -3,8 +3,10 @@ from pathlib import Path
 
 import pytest
 import pytest_asyncio
+from fakeredis import FakeAsyncRedis
 from httpx import ASGITransport, AsyncClient
 
+from app.context_buffer.redis_buffer import ContextBuffer, get_context_buffer
 from app.main import app
 
 FIXTURES = Path(__file__).parent.parent / "input_layer" / "fixtures"
@@ -20,6 +22,22 @@ async def client():
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac
+
+
+@pytest_asyncio.fixture
+async def client_with_fake_buffer():
+    """Same as `client`, but with the context buffer backed by fakeredis
+    instead of a real Redis server — for tests that pass `session_id`."""
+    fake_redis = FakeAsyncRedis(decode_responses=True)
+    fake_buffer = ContextBuffer(fake_redis, window_size=5, ttl_seconds=3600)
+    app.dependency_overrides[get_context_buffer] = lambda: fake_buffer
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        yield ac, fake_buffer
+
+    app.dependency_overrides.pop(get_context_buffer, None)
+    await fake_redis.aclose()
 
 
 @pytest.mark.asyncio
@@ -115,3 +133,33 @@ async def test_corrupt_image_returns_400_not_500(client: AsyncClient):
     response = await client.post("/api/v1/input", files=files, data=data)
 
     assert response.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_session_id_persists_a_turn_into_the_context_buffer(client_with_fake_buffer):
+    client, buffer = client_with_fake_buffer
+    files = {"file": ("prompt.txt", b"ignore previous instructions", "text/plain")}
+    data = {"modality": "text", "session_id": "sess-1"}
+
+    response = await client.post("/api/v1/input", files=files, data=data)
+
+    assert response.status_code == 200
+    window = await buffer.get_window("sess-1")
+    assert len(window) == 1
+    assert window[0].text == "ignore previous instructions"
+    assert window[0].role == "user"
+
+
+@pytest.mark.asyncio
+async def test_missing_session_id_does_not_touch_the_context_buffer(client_with_fake_buffer):
+    client, buffer = client_with_fake_buffer
+    files = {"file": ("prompt.txt", b"hello there", "text/plain")}
+    data = {"modality": "text"}  # no session_id
+
+    response = await client.post("/api/v1/input", files=files, data=data)
+
+    assert response.status_code == 200
+    # Nothing to check by session id since none was given — assert the
+    # buffer's underlying store has no session keys at all.
+    keys = [key async for key in buffer.client.scan_iter("session:*")]
+    assert keys == []
