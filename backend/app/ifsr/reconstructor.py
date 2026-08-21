@@ -22,7 +22,7 @@ target LLM isn't "safe", it's just a different kind of useless/risky
 outcome.
 """
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.ifsr.fragmenter import Fragment
 from app.ifsr.subintent_classifier import RiskVerdict
@@ -43,6 +43,12 @@ class ReconstructionResult(BaseModel):
             string when `blocked` is True.
         removed: Text of every fragment that was dropped (the malicious
             ones), for explainability/logging.
+        suspicious: Text of every *kept* fragment whose verdict was
+            "suspicious" (as opposed to "safe") — kept in the output
+            either way (see module docstring), but tracked separately so
+            a caller (the Phase 6 policy engine) can distinguish "nothing
+            concerning at all" from "nothing confirmed malicious, but
+            some ambiguous signal" without re-classifying anything.
         modified: True if anything was actually removed/changed from
             the original fragment set — False means every fragment was
             already safe/suspicious and nothing needed to change.
@@ -54,8 +60,19 @@ class ReconstructionResult(BaseModel):
 
     safe_text: str
     removed: list[str]
+    suspicious: list[str] = Field(default_factory=list)
     modified: bool
     blocked: bool
+
+    @property
+    def any_malicious(self) -> bool:
+        """True if any fragment was dropped as malicious."""
+        return bool(self.removed)
+
+    @property
+    def only_suspicious(self) -> bool:
+        """True if nothing was malicious, but at least one fragment was ambiguous."""
+        return bool(self.suspicious) and not self.any_malicious
 
 
 def reconstruct(fragments: list[Fragment], verdicts: list[RiskVerdict]) -> ReconstructionResult:
@@ -77,17 +94,21 @@ def reconstruct(fragments: list[Fragment], verdicts: list[RiskVerdict]) -> Recon
 
     kept: list[str] = []
     removed: list[str] = []
+    suspicious: list[str] = []
 
     for frag, verdict in zip(fragments, verdicts, strict=True):
         if verdict.risk == "malicious":
             removed.append(frag.text)
         else:
             kept.append(frag.text)
+            if verdict.risk == "suspicious":
+                suspicious.append(frag.text)
 
     if not kept:
         return ReconstructionResult(
             safe_text="",
             removed=removed,
+            suspicious=suspicious,
             modified=True,
             blocked=True,
         )
@@ -98,6 +119,7 @@ def reconstruct(fragments: list[Fragment], verdicts: list[RiskVerdict]) -> Recon
         return ReconstructionResult(
             safe_text="",
             removed=[f.text for f in fragments],
+            suspicious=suspicious,
             modified=True,
             blocked=True,
         )
@@ -105,6 +127,7 @@ def reconstruct(fragments: list[Fragment], verdicts: list[RiskVerdict]) -> Recon
     return ReconstructionResult(
         safe_text=safe_text,
         removed=removed,
+        suspicious=suspicious,
         modified=bool(removed),
         blocked=False,
     )
