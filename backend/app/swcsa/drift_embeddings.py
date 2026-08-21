@@ -106,3 +106,38 @@ def semantic_drift_cached(window: list[TurnRecord], new_text: str) -> float:
     window_embeddings = [get_or_compute_embedding(turn) for turn in window]
     new_embedding = embed(new_text)
     return _drift_from_embeddings(window_embeddings, new_embedding)
+
+
+def drift_trend_score(window: list[TurnRecord]) -> float:
+    """How much semantic drift is *accelerating* turn-over-turn within the window itself.
+
+    `semantic_drift`/`semantic_drift_cached` compare the new prompt to
+    the window's mean — a single snapshot. This instead looks at
+    consecutive-turn drift *within* the window (turn[i] vs turn[i-1])
+    and returns a simple, honestly-described trend signal: the last
+    consecutive-pair drift minus the first, clipped to [0, 1] (only a
+    *rising* trend counts — a window that's settling back toward its
+    starting topic isn't the pattern this is meant to catch).
+
+    This is not a rigorous statistical trend test (no regression, no
+    significance check) — just last-minus-first over a handful of
+    points, which is honest for a window of 3-5 turns but would be a
+    poor choice at a larger window size. A short window that's already
+    gradually pulling away from where it started — even if no single
+    consecutive pair looks remarkable — is the slow-burn pattern this
+    is a proxy for.
+
+    Needs at least 3 turns (2 consecutive-pair drifts to compare);
+    returns 0.0 below that.
+    """
+    if len(window) < 3:
+        return 0.0
+
+    embeddings = [get_or_compute_embedding(turn) for turn in window]
+    consecutive_drifts = [
+        1.0 - cosine_similarity(embeddings[i], embeddings[i - 1])
+        for i in range(1, len(embeddings))
+    ]
+
+    trend = consecutive_drifts[-1] - consecutive_drifts[0]
+    return max(0.0, min(1.0, trend))

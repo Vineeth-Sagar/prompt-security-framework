@@ -1,6 +1,7 @@
 from app.context_buffer.redis_buffer import TurnRecord
 from app.swcsa.drift_embeddings import (
     cosine_similarity,
+    drift_trend_score,
     embed,
     get_or_compute_embedding,
     semantic_drift,
@@ -81,3 +82,39 @@ def test_semantic_drift_cached_matches_semantic_drift():
 
 def test_semantic_drift_cached_empty_window_is_zero():
     assert semantic_drift_cached([], "anything") == 0.0
+
+
+# drift_trend_score — consecutive-turn drift trend *within* the window
+# itself (distinct from semantic_drift's window-vs-new-text snapshot).
+
+
+def test_drift_trend_requires_at_least_three_turns():
+    two_turns = [TurnRecord(text=t, role="user") for t in WINDOW[:2]]
+
+    assert drift_trend_score(two_turns) == 0.0
+    assert drift_trend_score([]) == 0.0
+
+
+def test_drift_trend_is_bounded_zero_to_one():
+    turns = [TurnRecord(text=t, role="user") for t in WINDOW]
+
+    score = drift_trend_score(turns)
+
+    assert 0.0 <= score <= 1.0
+
+
+def test_drift_trend_caches_embeddings_on_turns():
+    turns = [TurnRecord(text=t, role="user") for t in WINDOW]
+    assert all(t.embedding is None for t in turns)
+
+    drift_trend_score(turns)
+
+    assert all(t.embedding is not None for t in turns)
+
+
+def test_drift_trend_is_zero_for_a_falling_or_flat_trend():
+    # Identical turns: every consecutive-pair drift is 0, so the trend
+    # (last minus first) is 0 minus 0 = 0, not negative-then-clipped.
+    turns = [TurnRecord(text="the same message every time", role="user") for _ in range(4)]
+
+    assert drift_trend_score(turns) == 0.0
