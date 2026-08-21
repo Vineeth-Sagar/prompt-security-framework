@@ -44,6 +44,9 @@ class Settings(BaseSettings):
     # --- SWCSA tuning (swcsa phase) ---
     drift_threshold: float = 0.8
     window_size: int = 5
+    swcsa_weight_semantic: float = 0.4
+    swcsa_weight_role_escalation: float = 0.4
+    swcsa_weight_topic_entropy: float = 0.2
 
     # --- context buffer (context_buffer phase) ---
     session_ttl_seconds: int = 3600
