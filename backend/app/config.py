@@ -44,9 +44,17 @@ class Settings(BaseSettings):
     # --- SWCSA tuning (swcsa phase) ---
     drift_threshold: float = 0.8
     window_size: int = 5
-    swcsa_weight_semantic: float = 0.4
-    swcsa_weight_role_escalation: float = 0.4
-    swcsa_weight_topic_entropy: float = 0.2
+    # Tuned via backend/eval/tune_swcsa_weights.py's *floored* search
+    # (every weight >= 0.05) against the labeled dataset — deliberately
+    # not the raw unconstrained-best combination that script also
+    # reports, which drove weight onto 1-2 signals and zeroed the rest
+    # (overfits the small hand-written dataset and defeats the point of
+    # having independent signals). See that script's module docstring.
+    swcsa_weight_semantic: float = 0.05
+    swcsa_weight_role_escalation: float = 0.35
+    swcsa_weight_topic_entropy: float = 0.5
+    swcsa_weight_window_escalation: float = 0.05
+    swcsa_weight_drift_trend: float = 0.05
 
     # --- context buffer (context_buffer phase) ---
     session_ttl_seconds: int = 3600
