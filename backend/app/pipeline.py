@@ -1,5 +1,5 @@
 """End-to-end orchestrator: input -> preprocessing -> context buffer ->
-SWCSA -> IFS-R -> policy, in one call, with per-stage timing.
+SWCSA -> IFS-R -> policy -> target LLM, in one call, with per-stage timing.
 
 This is the thing Phase 12's latency metric actually measures, and the
 thing a future API route (replacing/extending api/routes/input.py) will
@@ -15,6 +15,11 @@ escalation pattern across turns would be erased from the conversation
 history IFS-R/SWCSA read on the *next* turn — exactly the signal
 `window_role_escalation`/`drift_trend` exist to catch. So the buffer
 always sees what was really said, regardless of what got forwarded.
+
+The target LLM is only ever called when `policy.action != "BLOCK"`,
+with `policy.final_text` (the sanitized/rewritten/unmodified prompt,
+never the raw input) — a BLOCKed prompt short-circuits with no LLM call
+at all and a static rejection message instead.
 """
 
 import time
@@ -27,9 +32,15 @@ from app.ifsr.reconstructor import ReconstructionResult, reconstruct
 from app.ifsr.subintent_classifier import classify
 from app.input_layer.base import InputResult
 from app.input_layer.router import get_handler, resolve_modality
+from app.llm_gateway.anthropic_adapter import get_llm_adapter
+from app.llm_gateway.base import BaseLLMAdapter, LLMResponse
 from app.policy.engine import PolicyDecision, get_policy_engine
 from app.preprocessing.normalizer import normalize
 from app.swcsa.drift_score import DriftBreakdown, compute_drift
+
+BLOCK_REJECTION_MESSAGE = (
+    "This request was blocked by the policy engine and was not sent to the target LLM."
+)
 
 
 class StageTiming(BaseModel):
@@ -39,14 +50,25 @@ class StageTiming(BaseModel):
 
 class PipelineResult(BaseModel):
     """Everything one call to `run_pipeline` produced, for both the
-    caller (final_text/action) and the explainability dashboard
-    (everything else)."""
+    caller (final_text/llm_response) and the explainability dashboard
+    (everything else).
+
+    Attributes:
+        llm_response: The target LLM's response, or None when
+            `policy.action == "BLOCK"` (the LLM was never called).
+        rejection_message: A static explanation, populated only when
+            blocked — `llm_response` staying None isn't itself
+            distinguishable from "not populated yet" to a caller that
+            doesn't also check `policy.action`.
+    """
 
     session_id: str
     input_result: InputResult
     drift: DriftBreakdown
     ifsr: ReconstructionResult
     policy: PolicyDecision
+    llm_response: LLMResponse | None
+    rejection_message: str | None
     stage_timings: list[StageTiming]
     total_duration_ms: float
 
@@ -58,6 +80,7 @@ async def run_pipeline(
     content_type: str | None = None,
     filename: str | None = None,
     buffer: ContextBuffer | None = None,
+    llm_adapter: BaseLLMAdapter | None = None,
 ) -> PipelineResult:
     """Run `raw_input` through the full pipeline for `session_id`.
 
@@ -71,10 +94,15 @@ async def run_pipeline(
         buffer: Injected ContextBuffer, defaulting to the process-wide
             singleton — overridable so tests/eval scripts don't need a
             real Redis server.
+        llm_adapter: Injected BaseLLMAdapter, defaulting to the
+            process-wide Anthropic singleton — overridable so tests can
+            assert the adapter is never called for a BLOCKed prompt
+            without making a real API call.
     """
     stage_timings: list[StageTiming] = []
     pipeline_start = time.perf_counter()
     buffer = buffer if buffer is not None else get_context_buffer()
+    llm_adapter = llm_adapter if llm_adapter is not None else get_llm_adapter()
 
     # --- 1. input layer ---
     stage_start = time.perf_counter()
@@ -115,6 +143,16 @@ async def run_pipeline(
     decision = get_policy_engine().decide(drift, ifsr_result)
     stage_timings.append(_elapsed("policy", stage_start))
 
+    # --- 7. target LLM: only called when policy didn't BLOCK ---
+    stage_start = time.perf_counter()
+    llm_response: LLMResponse | None = None
+    rejection_message: str | None = None
+    if decision.action == "BLOCK":
+        rejection_message = BLOCK_REJECTION_MESSAGE
+    else:
+        llm_response = await llm_adapter.generate(decision.final_text)
+    stage_timings.append(_elapsed("llm_gateway", stage_start))
+
     # --- persist this turn for future calls' drift window ---
     stage_start = time.perf_counter()
     await buffer.add_turn(session_id, TurnRecord(text=normalized.text, role="user"))
@@ -128,6 +166,8 @@ async def run_pipeline(
         drift=drift,
         ifsr=ifsr_result,
         policy=decision,
+        llm_response=llm_response,
+        rejection_message=rejection_message,
         stage_timings=stage_timings,
         total_duration_ms=total_duration_ms,
     )

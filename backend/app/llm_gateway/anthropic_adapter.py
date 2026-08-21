@@ -118,3 +118,17 @@ class AnthropicAdapter(BaseLLMAdapter):
         raise LLMRateLimitExceededError(
             f"Rate limited after {self._max_retries} retries"
         ) from last_error
+
+
+_adapter: BaseLLMAdapter | None = None
+
+
+def get_llm_adapter() -> BaseLLMAdapter:
+    """Process-wide default adapter (lazy singleton) — a plain function
+    (not @lru_cache), same pattern as get_context_buffer()/
+    get_policy_engine(), so it stays overridable (e.g. pipeline.py's
+    injectable `llm_adapter` param, or a future FastAPI dependency)."""
+    global _adapter
+    if _adapter is None:
+        _adapter = AnthropicAdapter()
+    return _adapter
