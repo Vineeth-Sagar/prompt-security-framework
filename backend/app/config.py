@@ -1,8 +1,10 @@
 """Application settings, loaded from environment variables (.env in dev).
 
-Only the fields needed by the current phase are defined here; later phases
-add settings for Redis, Postgres, JWT, the LLM adapter, etc. as those
-modules land, instead of speculatively declaring them all now.
+Fields below cover Phase 0 (app metadata, CORS) plus the connection/secret/
+tuning values the near-term phases (context buffer, SWCSA, LLM gateway,
+auth) will need, so later phases only have to *use* a setting instead of
+adding it. Fields specific to a not-yet-built layer stay unused until that
+phase lands — see `.env.example` for the authoritative list and defaults.
 """
 
 from functools import lru_cache
@@ -20,9 +22,28 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
+    # --- app metadata ---
     app_name: str = "prompt-security-framework"
+    app_version: str = "0.1.0"
     environment: str = "development"
     log_level: str = "INFO"
+
+    # --- CORS ---
+    frontend_origin: str = "http://localhost:3000"
+
+    # --- data layer (context_buffer / logging phases) ---
+    redis_url: str = "redis://localhost:6379/0"
+    database_url: str = "postgresql+asyncpg://psf:psf@localhost:5432/psf"
+
+    # --- auth (auth/RBAC phase) ---
+    jwt_secret: str = "dev-secret-change-me"
+
+    # --- target LLM (llm_gateway phase) ---
+    anthropic_api_key: str = ""
+
+    # --- SWCSA tuning (swcsa phase) ---
+    drift_threshold: float = 0.8
+    window_size: int = 5
 
 
 @lru_cache

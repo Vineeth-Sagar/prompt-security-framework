@@ -5,6 +5,7 @@ Route modules are mounted here as later phases add them
 """
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
 
@@ -16,7 +17,15 @@ app = FastAPI(
         "Adaptive Context-Aware Multi-Layer Prompt Security & Output "
         "Governance Framework — API gateway."
     ),
-    version="0.1.0",
+    version=settings.app_version,
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[settings.frontend_origin],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
@@ -29,4 +38,4 @@ def health() -> dict[str, str]:
     is added once those clients exist, so this stays a cheap process
     liveness probe rather than a full readiness check.
     """
-    return {"status": "ok", "service": settings.app_name}
+    return {"status": "ok", "service": settings.app_name, "version": settings.app_version}

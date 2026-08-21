@@ -17,3 +17,4 @@ def test_health_payload_reports_service_name():
 
     assert body["status"] == "ok"
     assert body["service"] == "prompt-security-framework"
+    assert "version" in body
