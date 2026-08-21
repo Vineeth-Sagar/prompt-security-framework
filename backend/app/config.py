@@ -45,6 +45,9 @@ class Settings(BaseSettings):
     drift_threshold: float = 0.8
     window_size: int = 5
 
+    # --- context buffer (context_buffer phase) ---
+    session_ttl_seconds: int = 3600
+
 
 @lru_cache
 def get_settings() -> Settings:
