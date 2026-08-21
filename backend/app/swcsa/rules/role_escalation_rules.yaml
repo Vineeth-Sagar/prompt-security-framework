@@ -1,0 +1,98 @@
+# Role-escalation heuristic rules for SWCSA (backend/app/swcsa/role_escalation.py).
+#
+# Each rule is a regex pattern matched against a single prompt. When it
+# matches, its `weight` contributes to the aggregate role-escalation
+# score (weights sum, then clip to [0, 1] — several weak signals firing
+# together can add up to a strong one).
+#
+# `case_sensitive` matters for the role-prefix-spoofing rules
+# specifically: a message containing a capitalized "System:"/"Assistant:"
+# marker is imitating a real chat-format role boundary (a much stronger
+# signal) than the same words appearing lowercase in ordinary prose, so
+# those rules match literal case. Everything else is a phrase whose
+# intent doesn't change with casing, so those match case-insensitively.
+#
+# This is a heuristic keyword/pattern layer, not a learned classifier —
+# expect false negatives on paraphrased attacks and some false positives
+# on prompts that legitimately discuss these phrases (e.g. someone
+# asking "how do prompt injection attacks like 'ignore previous
+# instructions' work?"). It's one signal the aggregator (drift_score.py)
+# weighs alongside semantic drift and topic hopping, not a standalone
+# blocker.
+
+rules:
+  - id: ignore_previous_instructions
+    pattern: 'ignore\s+(all\s+)?(the\s+|your\s+)?(previous|prior|above|earlier)\s+instructions'
+    weight: 0.9
+    case_sensitive: false
+    description: Direct attempt to override prior instructions.
+
+  - id: disregard_guidelines
+    pattern: 'disregard\s+(your\s+|all\s+|the\s+)?(guidelines|rules|restrictions|instructions)'
+    weight: 0.85
+    case_sensitive: false
+    description: Direct attempt to override safety guidelines.
+
+  - id: forget_everything_above
+    pattern: 'forget\s+(everything|all)\s+(above|before|prior)'
+    weight: 0.85
+    case_sensitive: false
+    description: Attempt to wipe prior context/instructions from consideration.
+
+  - id: you_are_now
+    pattern: 'you\s+are\s+now\s+(a|an|in|no\s+longer)'
+    weight: 0.6
+    case_sensitive: false
+    description: Persona/mode override attempt.
+
+  - id: act_as
+    pattern: '\bact\s+as\s+(a|an|if)'
+    weight: 0.5
+    case_sensitive: false
+    description: Persona override via roleplay framing.
+
+  - id: developer_mode
+    pattern: 'developer\s+mode|debug\s+mode|jailbreak(ed)?|dan\s+mode'
+    weight: 0.8
+    case_sensitive: false
+    description: Reference to a fictitious unrestricted operating mode.
+
+  - id: no_restrictions_framing
+    pattern: '(no|without)\s+(restrictions|filters|limitations|rules|guidelines)'
+    weight: 0.55
+    case_sensitive: false
+    description: Framing the assistant as having no safety constraints.
+
+  - id: reveal_system_prompt
+    pattern: '(reveal|show|print|repeat)\s+(your\s+)?(system\s+prompt|instructions|configuration)'
+    weight: 0.75
+    case_sensitive: false
+    description: Attempt to extract the system prompt/configuration.
+
+  - id: system_prefix_lowercase
+    pattern: '(^|\n)\s*system\s*:'
+    weight: 0.4
+    case_sensitive: false
+    description: >-
+      Lowercase "system:" line prefix — weaker signal than the
+      capitalized role-prefix-spoofing rule below, kept separate since
+      casual prose sometimes uses this phrasing innocently.
+
+  - id: role_prefix_spoofing_system
+    pattern: '(^|\n)\s*(System|SYSTEM):\s'
+    weight: 0.85
+    case_sensitive: true
+    description: >-
+      "System:"/"SYSTEM:" role-prefix appearing inside user text —
+      imitates a real chat-format role boundary to smuggle fake system
+      instructions. Matches title-case and all-caps specifically
+      (the forms that read as an imitated role marker); plain lowercase
+      "system:" is the separate, weaker system_prefix_lowercase rule.
+
+  - id: role_prefix_spoofing_assistant
+    pattern: '(^|\n)\s*(Assistant|ASSISTANT):\s'
+    weight: 0.85
+    case_sensitive: true
+    description: >-
+      "Assistant:"/"ASSISTANT:" role-prefix appearing inside user text —
+      simulates the assistant already having agreed to something.
