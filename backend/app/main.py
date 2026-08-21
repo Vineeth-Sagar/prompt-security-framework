@@ -7,6 +7,7 @@ Route modules are mounted here as later phases add them
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.routes.input import router as input_router
 from app.config import get_settings
 
 settings = get_settings()
@@ -27,6 +28,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(input_router)
 
 
 @app.get("/health", tags=["meta"])
