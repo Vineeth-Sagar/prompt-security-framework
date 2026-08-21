@@ -29,6 +29,9 @@ pytesseract==0.3.13
 pillow==10.4.0
 scipy==1.13.1
 
+# --- target LLM (llm_gateway phase) ---
+anthropic==1.0.0
+
 # --- auth / RBAC ---
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4

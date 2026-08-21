@@ -40,6 +40,9 @@ class Settings(BaseSettings):
 
     # --- target LLM (llm_gateway phase) ---
     anthropic_api_key: str = ""
+    anthropic_model: str = "claude-sonnet-5"
+    llm_timeout_seconds: float = 30.0
+    llm_max_retries: int = 3
 
     # --- SWCSA tuning (swcsa phase) ---
     drift_threshold: float = 0.8
