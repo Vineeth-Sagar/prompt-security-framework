@@ -1,0 +1,84 @@
+# Sub-intent risk rules for IFS-R (backend/app/ifsr/subintent_classifier.py).
+#
+# Same format/philosophy as swcsa/rules/role_escalation_rules.yaml (see
+# that file's header for the general caveats — heuristic, not a learned
+# classifier, expect paraphrase evasion). This file covers three risk
+# categories role-escalation rules don't: data exfiltration, sandbox/
+# code-execution escape, and PII solicitation about third parties.
+#
+# `category` is reported in the classifier's verdict for explainability
+# (which *kind* of risk fired, not just that something did).
+
+rules:
+  # --- data exfiltration ---
+  - id: dump_training_data
+    pattern: 'output\s+your\s+training\s+data|dump\s+your\s+(memory|training\s+data)|list\s+your\s+training\s+data\s+sources'
+    weight: 0.7
+    category: data_exfiltration
+    case_sensitive: false
+    description: Attempt to extract training data or internal memory contents.
+
+  - id: dump_configuration
+    pattern: 'show\s+(me\s+)?your\s+(configuration|config|internal\s+settings)'
+    weight: 0.6
+    category: data_exfiltration
+    case_sensitive: false
+    description: Attempt to extract internal configuration.
+
+  # --- sandbox / code-execution escape ---
+  - id: execute_arbitrary_code
+    pattern: 'run\s+(this|arbitrary)\s+(code|script)|execute\s+(this|arbitrary)\s+(code|script)|run\s+this\s+script\s+directly'
+    weight: 0.7
+    category: sandbox_escape
+    case_sensitive: false
+    description: Request to execute code directly rather than through a sandboxed path.
+
+  - id: access_file_system
+    pattern: "access\\s+the\\s+file\\s+system|read\\s+(files|the\\s+filesystem)\\s+on\\s+the\\s+server|list\\s+(the\\s+)?server'?s?\\s+files"
+    weight: 0.65
+    category: sandbox_escape
+    case_sensitive: false
+    description: Request to access the host filesystem directly.
+
+  - id: shell_access
+    pattern: 'give\s+me\s+shell\s+access|open\s+a\s+shell|spawn\s+a\s+(shell|terminal)'
+    weight: 0.75
+    category: sandbox_escape
+    case_sensitive: false
+    description: Request for direct shell/terminal access.
+
+  - id: bypass_sandbox
+    pattern: 'bypass\s+the\s+sandbox|escape\s+the\s+sandbox|break\s+out\s+of\s+the\s+sandbox|disable\s+sandbox(ing)?'
+    weight: 0.8
+    category: sandbox_escape
+    case_sensitive: false
+    description: Explicit request to bypass sandboxed code execution.
+
+  # --- PII solicitation about third parties ---
+  - id: pii_ssn_or_id
+    pattern: "(social\\s+security\\s+number|passport\\s+number|national\\s+id\\s+number)\\s+(of|for)\\s+"
+    weight: 0.75
+    category: pii_solicitation
+    case_sensitive: false
+    description: Solicitation of a government ID number belonging to a third party.
+
+  - id: pii_locate_person
+    pattern: "(find|look\\s+up|locate)\\s+(this\\s+person'?s?|someone'?s?|their|her|his)\\s+(home\\s+)?(address|phone\\s+number|location)"
+    weight: 0.7
+    category: pii_solicitation
+    case_sensitive: false
+    description: Solicitation of a third party's contact/location information.
+
+  - id: dox_request
+    pattern: '\bdox(x?ing)?\s+(this|that|him|her|them)\b'
+    weight: 0.85
+    category: pii_solicitation
+    case_sensitive: false
+    description: Explicit doxxing request.
+
+  - id: reveal_personal_info
+    pattern: 'reveal\s+personal\s+(information|details)\s+about'
+    weight: 0.6
+    category: pii_solicitation
+    case_sensitive: false
+    description: General solicitation of a third party's personal information.
