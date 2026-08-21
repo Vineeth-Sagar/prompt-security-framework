@@ -1,5 +1,7 @@
 # Adaptive Context-Aware Multi-Layer Prompt Security & Output Governance Framework
 
+**Status: Phase 0 — Foundations**
+
 A layered security gateway that sits in front of a target LLM. It inspects
 multi-modal input (text, audio, image), tracks conversational context across
 turns to detect slow-burn / multi-step prompt injection, fragments and
