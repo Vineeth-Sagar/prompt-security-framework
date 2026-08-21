@@ -35,6 +35,10 @@ class TurnRecord(BaseModel):
     role: str
     timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
     drift_score: float | None = None
+    # Cached sentence embedding (see swcsa/drift_embeddings.py), so SWCSA
+    # doesn't recompute it for the same turn on every later drift check
+    # against a window that still contains it. None until first computed.
+    embedding: list[float] | None = None
 
 
 _client: redis.Redis | None = None
