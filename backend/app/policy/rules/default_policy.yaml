@@ -1,0 +1,79 @@
+# Default policy for backend/app/policy/engine.py.
+#
+# Rules are evaluated top to bottom; the FIRST rule whose `when`
+# conditions are all true wins (later rules never get a chance to
+# override an earlier match — order is meaningful, not just documentation).
+# Every rule's `action` is one of BLOCK / SAFE_REWRITE / PASS.
+#
+# Condition syntax: "<object>.<field> <op> <value>", where <object> is
+# either `drift` (a DriftBreakdown) or `ifsr` (a ReconstructionResult),
+# <op> is one of >= <= == != > <, and <value> is a number or
+# true/false. `when: []` (no conditions) always matches — used for the
+# trailing default rule, which must always be last.
+#
+# This is a human-editable rule LIST specifically so a non-engineer
+# (guide/panel reviewer) can read the rationale comments and understand
+# the actual enforcement policy without reading engine.py.
+#
+# NOTE: independent of these rules, engine.py always forces BLOCK when
+# ifsr.blocked is true (IFS-R itself couldn't produce any usable safe
+# text — every fragment was malicious, or nothing survived) — that's a
+# hard-coded safety floor, not something a YAML edit here can override.
+
+rules:
+  - name: block_high_drift_with_malicious_content
+    when:
+      - "drift.aggregate >= 0.8"
+      - "ifsr.any_malicious == true"
+    action: BLOCK
+    rationale: >-
+      High conversational drift AND IFS-R already confirmed at least
+      one fragment as malicious — two independent layers agree this is
+      an attack, so block outright rather than attempt a rewrite.
+
+  - name: rewrite_high_drift_suspicious_only
+    when:
+      - "drift.aggregate >= 0.8"
+      - "ifsr.only_suspicious == true"
+    action: SAFE_REWRITE
+    rationale: >-
+      High drift, but IFS-R found nothing confirmed malicious — only
+      weak/ambiguous signal. Degrade gracefully to the reconstructed
+      prompt instead of blocking a request that might still be
+      legitimate; SWCSA's drift score alone is not proof of intent.
+
+  - name: rewrite_high_drift_no_ifsr_signal
+    when:
+      - "drift.aggregate >= 0.8"
+      - "ifsr.any_malicious == false"
+      - "ifsr.only_suspicious == false"
+    action: SAFE_REWRITE
+    rationale: >-
+      High drift but IFS-R found nothing suspicious or malicious at
+      all — SWCSA and IFS-R disagree. Treat the disagreement
+      conservatively (rewrite, not pass) rather than trusting either
+      signal alone; this is exactly the kind of borderline case the
+      explainability log should surface for review.
+
+  - name: pass_low_drift_clean
+    when:
+      - "drift.aggregate < 0.5"
+      - "ifsr.any_malicious == false"
+    action: PASS
+    rationale: >-
+      Low drift and IFS-R found nothing malicious — let it through
+      unmodified. Deliberately does not also require
+      only_suspicious==false: a single weak/ambiguous fragment in an
+      otherwise low-drift conversation isn't worth degrading a normal
+      request over.
+
+  - name: default_safe_rewrite
+    when: []
+    action: SAFE_REWRITE
+    rationale: >-
+      Safe default for the mid-range (0.5 <= drift.aggregate < 0.8)
+      that no rule above explicitly covers, and a final catch-all for
+      anything unanticipated. Prefer degrading gracefully (rewrite)
+      over either a hard block (too aggressive for an unconfirmed
+      case) or an unmodified pass (too permissive) when we're not
+      confident either extreme is correct.
