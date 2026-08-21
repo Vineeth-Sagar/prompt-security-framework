@@ -19,6 +19,7 @@ datasketch==1.6.5
 faster-whisper==1.0.3
 pytesseract==0.3.13
 pillow==10.4.0
+scipy==1.13.1
 
 # --- auth / RBAC ---
 python-jose[cryptography]==3.3.0
