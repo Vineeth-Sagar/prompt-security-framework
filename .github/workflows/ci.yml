@@ -29,3 +29,36 @@ jobs:
 
       - name: Test (pytest)
         run: pytest backend/tests -q
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint (eslint)
+        run: npm run lint
+
+      - name: Type-check (tsc)
+        run: npx tsc --noEmit
+
+      - name: Build (next build)
+        run: npm run build
+        env:
+          # CI has no real backend to reach; a placeholder is enough —
+          # nothing in the current page tree calls the API client at
+          # build/prerender time, only from client components at
+          # runtime, so this just satisfies api-client.ts's presence
+          # check.
+          NEXT_PUBLIC_API_URL: http://localhost:8000
