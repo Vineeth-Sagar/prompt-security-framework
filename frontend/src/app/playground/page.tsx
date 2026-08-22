@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useId, useState } from "react";
 import type { FormEvent } from "react";
 import Link from "next/link";
 
@@ -44,7 +44,14 @@ export default function PlaygroundPage() {
 }
 
 function PlaygroundContent() {
-  const [sessionId, setSessionId] = useState<string>(() => `playground-${crypto.randomUUID()}`);
+  // useId() (not crypto.randomUUID()) — this page is statically
+  // prerendered, and useId() is specifically designed to produce the
+  // same value during the server prerender and the client's hydration
+  // pass, where a real random value wouldn't match between the two and
+  // React would discard/re-render the whole tree ("Hydration failed
+  // because the server rendered HTML didn't match the client").
+  const sessionIdSeed = useId();
+  const [sessionId, setSessionId] = useState(() => `playground-${sessionIdSeed}`);
   const [modality, setModality] = useState<Modality>("text");
   const [text, setText] = useState("");
   const [file, setFile] = useState<File | null>(null);
