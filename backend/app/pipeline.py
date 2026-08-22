@@ -31,13 +31,24 @@ while `final_response_text` — the thing actually meant to reach the
 user — is built from the *redacted* text, so a leaked secret sitting in
 a code comment or string still gets caught in what's delivered even
 though the sandbox ran the original.
+
+The very last thing every call does — regardless of outcome, including
+BLOCK — is persist a DecisionLog and publish a live-feed event
+(decision_logger.log_decision). This happens after `PipelineResult` is
+fully built, as a side effect rather than a timed pipeline stage: timing
+"how long logging took" would have to either exclude itself from its
+own snapshot or log a second time after appending its own duration,
+neither of which is worth the complexity for what's fundamentally
+fire-and-forget bookkeeping, not a decision-making stage.
 """
 
 import time
 
 from pydantic import BaseModel
+from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.context_buffer.redis_buffer import ContextBuffer, TurnRecord, get_context_buffer
+from app.db import get_engine
 from app.ifsr.fragmenter import fragment
 from app.ifsr.reconstructor import ReconstructionResult, reconstruct
 from app.ifsr.subintent_classifier import classify
@@ -45,6 +56,7 @@ from app.input_layer.base import InputResult
 from app.input_layer.router import get_handler, resolve_modality
 from app.llm_gateway.base import BaseLLMAdapter, LLMResponse
 from app.llm_gateway.factory import get_llm_adapter
+from app.logging.decision_logger import log_decision
 from app.output_governance.pii_scanner import PIIScanResult, scan
 from app.output_governance.sandbox_runner import SandboxResult, sandbox_llm_output
 from app.policy.engine import PolicyDecision, get_policy_engine
@@ -108,6 +120,7 @@ async def run_pipeline(
     filename: str | None = None,
     buffer: ContextBuffer | None = None,
     llm_adapter: BaseLLMAdapter | None = None,
+    db_session: AsyncSession | None = None,
 ) -> PipelineResult:
     """Run `raw_input` through the full pipeline for `session_id`.
 
@@ -125,6 +138,10 @@ async def run_pipeline(
             process-wide Anthropic singleton — overridable so tests can
             assert the adapter is never called for a BLOCKed prompt
             without making a real API call.
+        db_session: Injected AsyncSession for decision logging,
+            defaulting to a fresh session from the process-wide engine
+            — overridable so tests can point logging at an in-memory
+            SQLite database instead of real Postgres.
     """
     stage_timings: list[StageTiming] = []
     pipeline_start = time.perf_counter()
@@ -202,7 +219,7 @@ async def run_pipeline(
 
     total_duration_ms = (time.perf_counter() - pipeline_start) * 1000
 
-    return PipelineResult(
+    pipeline_result = PipelineResult(
         session_id=session_id,
         input_result=input_result,
         drift=drift,
@@ -216,6 +233,19 @@ async def run_pipeline(
         stage_timings=stage_timings,
         total_duration_ms=total_duration_ms,
     )
+
+    # --- explainable logging: persist + broadcast, regardless of outcome ---
+    # Reuses `buffer`'s own Redis client for the publish step (rather
+    # than the separate process-wide singleton) so injecting a fake
+    # buffer for tests also redirects decision-log broadcasts — one
+    # Redis connection to override, not two.
+    if db_session is not None:
+        await log_decision(pipeline_result, db_session, redis_client=buffer.client)
+    else:
+        async with AsyncSession(get_engine()) as session:
+            await log_decision(pipeline_result, session, redis_client=buffer.client)
+
+    return pipeline_result
 
 
 def _elapsed(stage: str, start: float) -> StageTiming:
