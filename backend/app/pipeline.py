@@ -20,6 +20,17 @@ The target LLM is only ever called when `policy.action != "BLOCK"`,
 with `policy.final_text` (the sanitized/rewritten/unmodified prompt,
 never the raw input) — a BLOCKed prompt short-circuits with no LLM call
 at all and a static rejection message instead.
+
+Output governance runs on whatever the LLM actually returned, before
+any of it is treated as safe to show the user. PII scanning always
+runs; the sandbox only runs when the response contains a fenced code
+block. The two operate on different inputs deliberately: the sandbox
+executes the LLM's *raw* text (so it observes the code's real behavior,
+not a version mangled by `[REDACTED:...]` substitutions mid-syntax),
+while `final_response_text` — the thing actually meant to reach the
+user — is built from the *redacted* text, so a leaked secret sitting in
+a code comment or string still gets caught in what's delivered even
+though the sandbox ran the original.
 """
 
 import time
@@ -34,6 +45,8 @@ from app.input_layer.base import InputResult
 from app.input_layer.router import get_handler, resolve_modality
 from app.llm_gateway.base import BaseLLMAdapter, LLMResponse
 from app.llm_gateway.factory import get_llm_adapter
+from app.output_governance.pii_scanner import PIIScanResult, scan
+from app.output_governance.sandbox_runner import SandboxResult, sandbox_llm_output
 from app.policy.engine import PolicyDecision, get_policy_engine
 from app.preprocessing.normalizer import normalize
 from app.swcsa.drift_score import DriftBreakdown, compute_drift
@@ -54,8 +67,19 @@ class PipelineResult(BaseModel):
     (everything else).
 
     Attributes:
-        llm_response: The target LLM's response, or None when
-            `policy.action == "BLOCK"` (the LLM was never called).
+        llm_response: The target LLM's raw response, or None when
+            `policy.action == "BLOCK"` (the LLM was never called). Kept
+            unredacted for audit/explainability — `final_response_text`
+            is what should actually reach the user.
+        pii_scan: PII scan of `llm_response.text`, or None when the LLM
+            was never called.
+        sandbox_result: Result of executing the first fenced code block
+            found in `llm_response.text`, or None when the LLM was
+            never called *or* the response contained no code block
+            (the common case — this is not an error signal).
+        final_response_text: The text that should actually be shown to
+            the user — `pii_scan.redacted_text` when the LLM was
+            called, None for BLOCK (use `rejection_message` instead).
         rejection_message: A static explanation, populated only when
             blocked — `llm_response` staying None isn't itself
             distinguishable from "not populated yet" to a caller that
@@ -68,6 +92,9 @@ class PipelineResult(BaseModel):
     ifsr: ReconstructionResult
     policy: PolicyDecision
     llm_response: LLMResponse | None
+    pii_scan: PIIScanResult | None
+    sandbox_result: SandboxResult | None
+    final_response_text: str | None
     rejection_message: str | None
     stage_timings: list[StageTiming]
     total_duration_ms: float
@@ -153,6 +180,21 @@ async def run_pipeline(
         llm_response = await llm_adapter.generate(decision.final_text)
     stage_timings.append(_elapsed("llm_gateway", stage_start))
 
+    # --- 8. output governance: only runs on an actual LLM response ---
+    stage_start = time.perf_counter()
+    pii_scan: PIIScanResult | None = None
+    sandbox_result: SandboxResult | None = None
+    final_response_text: str | None = None
+    if llm_response is not None:
+        pii_scan = scan(llm_response.text)
+        # Sandbox the *raw* response — a redacted code block is mangled
+        # syntax, not the code the LLM actually produced (see module
+        # docstring). sandbox_llm_output returns None by itself when
+        # there's no fenced code block, so no extra branch is needed here.
+        sandbox_result = sandbox_llm_output(llm_response.text)
+        final_response_text = pii_scan.redacted_text
+    stage_timings.append(_elapsed("output_governance", stage_start))
+
     # --- persist this turn for future calls' drift window ---
     stage_start = time.perf_counter()
     await buffer.add_turn(session_id, TurnRecord(text=normalized.text, role="user"))
@@ -167,6 +209,9 @@ async def run_pipeline(
         ifsr=ifsr_result,
         policy=decision,
         llm_response=llm_response,
+        pii_scan=pii_scan,
+        sandbox_result=sandbox_result,
+        final_response_text=final_response_text,
         rejection_message=rejection_message,
         stage_timings=stage_timings,
         total_duration_ms=total_duration_ms,
