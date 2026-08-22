@@ -51,7 +51,7 @@ from app.context_buffer.redis_buffer import ContextBuffer, TurnRecord, get_conte
 from app.db import get_engine
 from app.ifsr.fragmenter import fragment
 from app.ifsr.reconstructor import ReconstructionResult, reconstruct
-from app.ifsr.subintent_classifier import classify
+from app.ifsr.subintent_classifier import classify_all
 from app.input_layer.base import InputResult
 from app.input_layer.router import get_handler, resolve_modality
 from app.llm_gateway.base import BaseLLMAdapter, LLMResponse
@@ -189,7 +189,7 @@ async def run_pipeline(
     # --- 5. IFS-R ---
     stage_start = time.perf_counter()
     fragments = fragment(normalized.text_cased)
-    verdicts = [classify(f) for f in fragments]
+    verdicts = classify_all(fragments)
     ifsr_result = reconstruct(fragments, verdicts)
     stage_timings.append(_elapsed("ifsr", stage_start))
 
