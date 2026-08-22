@@ -36,6 +36,12 @@ google-genai==2.19.0
 # --- auth / RBAC ---
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
+# bcrypt pinned <4.1: passlib 1.7.4 (unmaintained since 2020) probes
+# bcrypt's `__about__.__version__` attribute during backend detection,
+# which bcrypt 4.1+ removed — pip's resolver doesn't catch this, it's a
+# runtime crash on the first hash() call, not an install-time conflict
+# (same class of issue as the numpy/thinc pin above).
+bcrypt==4.0.1
 python-multipart==0.0.9
 
 # --- dev / test / lint ---
