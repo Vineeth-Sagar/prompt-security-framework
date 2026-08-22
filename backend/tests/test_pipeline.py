@@ -5,11 +5,12 @@ import pytest_asyncio
 from fakeredis import FakeAsyncRedis
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.pool import StaticPool
-from sqlmodel import SQLModel
+from sqlmodel import SQLModel, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.context_buffer.redis_buffer import ContextBuffer
 from app.llm_gateway.base import BaseLLMAdapter, LLMResponse
+from app.logging.models import DecisionLog
 from app.pipeline import BLOCK_REJECTION_MESSAGE, run_pipeline
 
 EXPECTED_STAGES = {
@@ -89,6 +90,27 @@ async def test_pipeline_runs_end_to_end_on_a_sample_prompt(
     assert result.ifsr is not None
     assert result.policy is not None
     assert result.policy.action in ("BLOCK", "SAFE_REWRITE", "PASS")
+
+
+@pytest.mark.asyncio
+async def test_log_id_is_populated_from_the_persisted_decision_log(
+    buffer: ContextBuffer, db_session: AsyncSession, mock_llm_adapter: BaseLLMAdapter
+):
+    result = await run_pipeline(
+        "sess-1",
+        "What is the capital of France?",
+        buffer=buffer,
+        llm_adapter=mock_llm_adapter,
+        db_session=db_session,
+    )
+
+    assert result.log_id is not None
+
+    log = (
+        await db_session.exec(select(DecisionLog).where(DecisionLog.id == result.log_id))
+    ).first()
+    assert log is not None
+    assert log.session_id == "sess-1"
 
 
 @pytest.mark.asyncio

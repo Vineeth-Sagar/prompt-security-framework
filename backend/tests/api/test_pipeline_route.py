@@ -119,6 +119,26 @@ async def test_authenticated_user_gets_a_full_pipeline_result(client):
     assert body["ifsr"] is not None
     assert "stage_timings" in body
     assert body["total_duration_ms"] >= 0
+    assert body["log_id"] is not None
+
+
+@pytest.mark.asyncio
+async def test_log_id_links_to_the_full_decision_log_via_the_logs_endpoint(client):
+    ac, _buffer = client
+    token = await _register_and_login(ac, "user@example.com", "userpass123")
+    headers = _auth_header(token)
+    files = {"file": ("prompt.txt", b"Can you help me plan a birthday party?", "text/plain")}
+    data = {"modality": "text", "session_id": "sess-trace"}
+
+    run_response = await ac.post(
+        "/api/v1/pipeline/run", files=files, data=data, headers=headers
+    )
+    log_id = run_response.json()["log_id"]
+
+    log_response = await ac.get(f"/api/v1/logs/{log_id}", headers=headers)
+
+    assert log_response.status_code == 200
+    assert log_response.json()["session_id"] == "sess-trace"
 
 
 @pytest.mark.asyncio

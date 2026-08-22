@@ -116,6 +116,11 @@ export interface PipelineResult {
   rejection_message: string | null;
   stage_timings: StageTiming[];
   total_duration_ms: number;
+  /** The persisted DecisionLog row's id — always populated by the time
+   * the response reaches the client (logging happens unconditionally,
+   * see app/pipeline.py), so treat this as non-null in practice despite
+   * the wire type; a full trace lives at GET /api/v1/logs/{log_id}. */
+  log_id: number | null;
 }
 
 // --- logs (GET /api/v1/logs, GET /api/v1/logs/{id}) ---

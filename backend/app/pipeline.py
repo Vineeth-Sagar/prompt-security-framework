@@ -96,6 +96,16 @@ class PipelineResult(BaseModel):
             blocked — `llm_response` staying None isn't itself
             distinguishable from "not populated yet" to a caller that
             doesn't also check `policy.action`.
+        log_id: The DecisionLog row's id, for linking straight to
+            GET /api/v1/logs/{id}'s full-detail view (e.g. a
+            Playground "view full trace" link) without a separate
+            lookup. Typed Optional only because the field has to exist
+            before the DecisionLog is written (logging happens last,
+            after this model is built — see the bottom of
+            `run_pipeline`); by the time `run_pipeline` actually
+            returns, it's always been overwritten with a real id, since
+            logging happens unconditionally for every outcome including
+            BLOCK.
     """
 
     session_id: str
@@ -110,6 +120,7 @@ class PipelineResult(BaseModel):
     rejection_message: str | None
     stage_timings: list[StageTiming]
     total_duration_ms: float
+    log_id: int | None = None
 
 
 async def run_pipeline(
@@ -240,10 +251,11 @@ async def run_pipeline(
     # buffer for tests also redirects decision-log broadcasts — one
     # Redis connection to override, not two.
     if db_session is not None:
-        await log_decision(pipeline_result, db_session, redis_client=buffer.client)
+        log = await log_decision(pipeline_result, db_session, redis_client=buffer.client)
     else:
         async with AsyncSession(get_engine()) as session:
-            await log_decision(pipeline_result, session, redis_client=buffer.client)
+            log = await log_decision(pipeline_result, session, redis_client=buffer.client)
+    pipeline_result.log_id = log.id
 
     return pipeline_result
 
