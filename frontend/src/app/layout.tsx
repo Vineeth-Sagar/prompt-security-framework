@@ -4,6 +4,8 @@ import "./globals.css";
 
 import { AuthProvider } from "@/components/auth-provider";
 import { NavBar } from "@/components/nav-bar";
+import { ThemeProvider } from "@/components/theme-provider";
+import { Toaster } from "@/components/ui/sonner";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -26,12 +28,22 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
     <html
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      // next-themes sets the .dark class on <html> from a blocking
+      // inline script before hydration, based on the browser's actual
+      // preference/localStorage — that will legitimately differ from
+      // what the server rendered (which has no way to know either).
+      // This is next-themes' own documented use of
+      // suppressHydrationWarning, scoped to just this one attribute.
+      suppressHydrationWarning
     >
       <body className="min-h-full flex flex-col">
-        <AuthProvider>
-          <NavBar />
-          <main className="flex flex-1 flex-col">{children}</main>
-        </AuthProvider>
+        <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
+          <AuthProvider>
+            <NavBar />
+            <main className="flex flex-1 flex-col">{children}</main>
+            <Toaster />
+          </AuthProvider>
+        </ThemeProvider>
       </body>
     </html>
   );

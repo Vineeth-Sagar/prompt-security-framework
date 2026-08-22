@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { toast } from "sonner";
 
 import { useAuth } from "@/components/auth-provider";
 import { RequireRole } from "@/components/require-role";
@@ -69,12 +70,17 @@ function AdminContent() {
 
   async function applyUpdate(id: number, patch: { role?: UserRole; is_active?: boolean }) {
     setPendingId(id);
-    setError(null);
     try {
       const updated = await updateUser(id, patch);
       setUsers((prev) => prev.map((u) => (u.id === id ? updated : u)));
+      toast.success(`Updated ${updated.email}.`);
     } catch (err) {
-      setError(err instanceof ApiError ? String(err.detail ?? err.message) : "Update failed.");
+      // A toast, not the page-level Alert below — this is a transient
+      // per-row action failure, not a reason the whole page's content
+      // (the user list, which loaded fine) should look broken.
+      toast.error(
+        err instanceof ApiError ? String(err.detail ?? err.message) : "Update failed."
+      );
     } finally {
       setPendingId(null);
     }
@@ -107,6 +113,8 @@ function AdminContent() {
         <CardContent>
           {loading ? (
             <Skeleton className="h-48 w-full" />
+          ) : users.length === 0 ? (
+            <p className="text-muted-foreground text-sm">No users found.</p>
           ) : (
             <div className="overflow-x-auto">
               <Table>
