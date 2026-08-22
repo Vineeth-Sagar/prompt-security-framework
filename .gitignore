@@ -35,6 +35,12 @@ pnpm-debug.log*
 # --- Docker / data volumes ---
 pgdata/
 redisdata/
+# Local machine-specific compose tweaks (e.g. remapping a port that
+# conflicts with something else already running on this host) — never
+# meant to be shared, docker-compose.yml is the source of truth for
+# every other machine. `docker compose` picks this up automatically
+# alongside docker-compose.yml when it exists.
+docker-compose.override.yml
 
 # --- OS / editor ---
 .DS_Store
