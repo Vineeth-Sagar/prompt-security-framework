@@ -24,6 +24,9 @@ export function NavBar() {
         <div className="flex items-center gap-3 text-sm">
           {loading ? null : user ? (
             <>
+              <Link href="/playground" className="text-muted-foreground hover:text-foreground">
+                Playground
+              </Link>
               <span className="text-muted-foreground hidden sm:inline">
                 {user.email} · {user.role}
               </span>
