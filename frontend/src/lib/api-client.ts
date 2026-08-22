@@ -238,6 +238,22 @@ export async function runPipelineText(text: string, sessionId?: string): Promise
   return runPipeline({ file: blob, filename: "prompt.txt", modality: "text", sessionId });
 }
 
+// --- user management (admin only) ---
+
+export async function listUsers(): Promise<UserPublic[]> {
+  return rawRequest<UserPublic[]>("/api/v1/users");
+}
+
+export async function updateUser(
+  id: number,
+  patch: { role?: UserRole; is_active?: boolean }
+): Promise<UserPublic> {
+  return rawRequest<UserPublic>(`/api/v1/users/${id}`, {
+    method: "PATCH",
+    body: patch,
+  });
+}
+
 // --- logs ---
 
 export async function listLogs(filters: LogFilters = {}): Promise<PaginatedLogs> {

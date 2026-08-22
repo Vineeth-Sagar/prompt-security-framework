@@ -37,6 +37,11 @@ export function NavBar() {
                   </Link>
                 </>
               )}
+              {user.role === "admin" && (
+                <Link href="/admin" className="text-muted-foreground hover:text-foreground">
+                  Admin
+                </Link>
+              )}
               <span className="text-muted-foreground hidden sm:inline">
                 {user.email} · {user.role}
               </span>
