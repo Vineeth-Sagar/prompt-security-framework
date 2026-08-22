@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.auth.models import User  # noqa: E402,F401 — import registers User on SQLModel.metadata
 from app.config import get_settings  # noqa: E402
+from app.logging.models import DecisionLog  # noqa: E402,F401 — registers DecisionLog too
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
