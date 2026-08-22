@@ -11,6 +11,7 @@ from app.api.routes.auth import router as auth_router
 from app.api.routes.input import router as input_router
 from app.api.routes.logs import router as logs_router
 from app.api.routes.pipeline import router as pipeline_router
+from app.api.routes.users import router as users_router
 from app.api.routes.ws import router as ws_router
 from app.config import get_settings
 
@@ -37,6 +38,7 @@ app.include_router(input_router)
 app.include_router(auth_router)
 app.include_router(logs_router)
 app.include_router(pipeline_router)
+app.include_router(users_router)
 app.include_router(ws_router)
 
 

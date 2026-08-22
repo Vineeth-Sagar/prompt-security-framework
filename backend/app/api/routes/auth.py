@@ -44,6 +44,7 @@ class UserPublic(BaseModel):
     id: int
     email: str
     role: UserRole
+    is_active: bool
     created_at: datetime
 
 
@@ -123,6 +124,11 @@ async def login(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Account is deactivated"
+        )
+
     return TokenPair(
         access_token=create_access_token(user.email),
         refresh_token=create_refresh_token(user.email),
@@ -148,6 +154,11 @@ async def refresh(
     if user is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Could not validate credentials"
+        )
+
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Account is deactivated"
         )
 
     return AccessTokenResponse(access_token=create_access_token(user.email))

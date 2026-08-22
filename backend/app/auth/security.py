@@ -110,6 +110,14 @@ async def get_current_user(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Could not validate credentials"
         )
 
+    if not user.is_active:
+        # Re-checked on every request (not just at login) so a token
+        # issued before an admin deactivated this account stops working
+        # immediately, rather than staying valid until it naturally expires.
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Account is deactivated"
+        )
+
     return user
 
 

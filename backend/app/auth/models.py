@@ -26,6 +26,10 @@ class User(SQLModel, table=True):
     email: str = Field(unique=True, index=True, nullable=False)
     hashed_password: str
     role: UserRole = Field(default=UserRole.viewer, nullable=False)
+    # Deactivated users keep their row (audit trail, no id reuse) but
+    # can't log in or authenticate an existing token — see
+    # security.py's get_current_user and routes/auth.py's login().
+    is_active: bool = Field(default=True, nullable=False)
     # sa_column=Column(DateTime(timezone=True)) rather than SQLModel's
     # default plain `datetime` inference (which maps to Postgres'
     # TIMESTAMP WITHOUT TIME ZONE) — default_factory produces a
