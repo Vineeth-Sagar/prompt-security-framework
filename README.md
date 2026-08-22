@@ -28,7 +28,7 @@ Text/Audio/Image → Multi-Modal Input Layer → Text Normalization (FastAPI gat
 | **SWCSA** | Sliding Window Context Shift Analyzer — semantic drift (embeddings), role-escalation heuristics, topic-hopping entropy, aggregated into a drift score |
 | **IFS-R** | Intent Fragmentation & Safe Reconstruction — splits a prompt into micro-intents, classifies risk per fragment, sanitizes, rebuilds a safe prompt |
 | **Policy Engine** | Data-driven rules (YAML) consuming drift score + IFS-R verdict → BLOCK / SAFE_REWRITE / PASS |
-| **LLM Gateway** | Pluggable `BaseLLMAdapter` (Anthropic/OpenAI/local) — only sanitized prompts reach here |
+| **LLM Gateway** | Pluggable `BaseLLMAdapter` (Anthropic, Gemini — `TARGET_LLM_PROVIDER` selects which) — only sanitized prompts reach here |
 | **Output Governance** | PII/sensitive-data scanning on LLM responses, sandboxed execution for generated code |
 | **Explainable Logging** | Full per-request decision trace persisted to Postgres, streamed live via WebSocket |
 | **Admin Dashboard** | Next.js frontend — playground, live monitoring, explainability drill-down, audit logs, RBAC admin |

@@ -39,8 +39,11 @@ class Settings(BaseSettings):
     jwt_secret: str = "dev-secret-change-me"
 
     # --- target LLM (llm_gateway phase) ---
+    target_llm_provider: str = "gemini"  # "anthropic" or "gemini" — see llm_gateway/factory.py
     anthropic_api_key: str = ""
     anthropic_model: str = "claude-sonnet-5"
+    gemini_api_key: str = ""
+    gemini_model: str = "gemini-3.6-flash"
     llm_timeout_seconds: float = 30.0
     llm_max_retries: int = 3
 

@@ -31,6 +31,7 @@ scipy==1.13.1
 
 # --- target LLM (llm_gateway phase) ---
 anthropic==1.0.0
+google-genai==2.19.0
 
 # --- auth / RBAC ---
 python-jose[cryptography]==3.3.0

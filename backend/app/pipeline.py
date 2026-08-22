@@ -32,8 +32,8 @@ from app.ifsr.reconstructor import ReconstructionResult, reconstruct
 from app.ifsr.subintent_classifier import classify
 from app.input_layer.base import InputResult
 from app.input_layer.router import get_handler, resolve_modality
-from app.llm_gateway.anthropic_adapter import get_llm_adapter
 from app.llm_gateway.base import BaseLLMAdapter, LLMResponse
+from app.llm_gateway.factory import get_llm_adapter
 from app.policy.engine import PolicyDecision, get_policy_engine
 from app.preprocessing.normalizer import normalize
 from app.swcsa.drift_score import DriftBreakdown, compute_drift
