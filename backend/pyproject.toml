@@ -6,6 +6,10 @@ asyncio_default_fixture_loop_scope = "function"
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+# Alembic-generated migration files follow alembic's own boilerplate
+# conventions (Union/Optional style, unsorted stdlib-then-third-party
+# imports) — not worth reformatting generated code to match app style.
+extend-exclude = ["alembic/versions"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]

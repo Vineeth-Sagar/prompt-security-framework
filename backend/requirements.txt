@@ -51,3 +51,4 @@ httpx==0.28.1
 ruff==0.6.9
 mypy==1.11.2
 fakeredis==2.24.1
+aiosqlite==0.20.0
