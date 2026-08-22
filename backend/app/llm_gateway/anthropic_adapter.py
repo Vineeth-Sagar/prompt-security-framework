@@ -1,9 +1,9 @@
-"""Anthropic implementation of BaseLLMAdapter — the default target LLM.
+"""Anthropic implementation of BaseLLMAdapter.
 
 Wraps the anthropic SDK's async client: retries with exponential
 backoff on rate-limit (429) errors, and enforces a hard timeout on the
 whole call rather than trusting the SDK's own default. Both failure
-modes surface as this module's own typed exceptions
+modes surface as base.py's shared typed exceptions
 (LLMTimeoutError/LLMRateLimitExceededError) instead of a raw SDK
 exception, so callers don't need to import anthropic's exception types
 to handle them.
@@ -17,17 +17,14 @@ import anthropic
 from anthropic import AsyncAnthropic
 
 from app.config import get_settings
-from app.llm_gateway.base import BaseLLMAdapter, LLMResponse
+from app.llm_gateway.base import (
+    BaseLLMAdapter,
+    LLMRateLimitExceededError,
+    LLMResponse,
+    LLMTimeoutError,
+)
 
 DEFAULT_MAX_TOKENS = 1024
-
-
-class LLMTimeoutError(Exception):
-    """Raised when a call to the target LLM exceeds the configured timeout."""
-
-
-class LLMRateLimitExceededError(Exception):
-    """Raised when retries on repeated rate-limit (429) responses are exhausted."""
 
 
 class AnthropicAdapter(BaseLLMAdapter):
@@ -118,17 +115,3 @@ class AnthropicAdapter(BaseLLMAdapter):
         raise LLMRateLimitExceededError(
             f"Rate limited after {self._max_retries} retries"
         ) from last_error
-
-
-_adapter: BaseLLMAdapter | None = None
-
-
-def get_llm_adapter() -> BaseLLMAdapter:
-    """Process-wide default adapter (lazy singleton) — a plain function
-    (not @lru_cache), same pattern as get_context_buffer()/
-    get_policy_engine(), so it stays overridable (e.g. pipeline.py's
-    injectable `llm_adapter` param, or a future FastAPI dependency)."""
-    global _adapter
-    if _adapter is None:
-        _adapter = AnthropicAdapter()
-    return _adapter

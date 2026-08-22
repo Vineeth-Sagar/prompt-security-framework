@@ -14,6 +14,18 @@ from typing import Any
 from pydantic import BaseModel
 
 
+class LLMTimeoutError(Exception):
+    """Raised when a call to the target LLM exceeds the configured timeout.
+
+    Shared across adapters so callers (pipeline.py, tests) catch one
+    canonical exception type regardless of which provider is active.
+    """
+
+
+class LLMRateLimitExceededError(Exception):
+    """Raised when retries on repeated rate-limit (429) responses are exhausted."""
+
+
 class LLMResponse(BaseModel):
     """Normalized response from any target LLM.
 
