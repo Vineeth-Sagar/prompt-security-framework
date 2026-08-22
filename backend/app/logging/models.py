@@ -13,7 +13,7 @@ still plain indexed columns, not buried in JSON.
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import JSON, Column
+from sqlalchemy import JSON, Column, DateTime
 from sqlmodel import Field, SQLModel
 
 
@@ -29,4 +29,10 @@ class DecisionLog(SQLModel, table=True):
     matched_rule: str
     pii_found: list[Any] = Field(sa_column=Column(JSON, nullable=False))
     latency_ms_per_stage: dict[str, float] = Field(sa_column=Column(JSON, nullable=False))
-    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC), index=True)
+    # timezone=True — see the matching comment on app/auth/models.py's
+    # User.created_at for why this isn't just the SQLModel-inferred
+    # plain DateTime.
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(UTC),
+        sa_column=Column(DateTime(timezone=True), nullable=False, index=True),
+    )
