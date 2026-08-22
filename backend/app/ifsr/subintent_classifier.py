@@ -5,7 +5,14 @@ set (a fragment saying "ignore previous instructions" is exactly as
 risky standing alone as it was as part of a whole prompt) plus a
 second, IFS-R-specific rule file (rules/subintent_rules.yaml) covering
 three categories role-escalation doesn't: data exfiltration, sandbox/
-code-execution escape, and PII solicitation about third parties.
+code-execution escape, and PII solicitation about third parties. A
+third score, `semantic_injection_score()`
+(swcsa/semantic_injection_similarity.py), was added after a live
+false negative both regex rule sets missed for the same underlying
+reason (see that module's docstring for the full trace and threshold
+calibration) — it catches paraphrases of known injection intents that
+no regex anticipated, by embedding-space similarity rather than exact
+wording.
 
 Extension point for v2: swap or blend in a learned classifier by
 replacing this module's `classify()` body — callers everywhere else
@@ -35,6 +42,7 @@ from pydantic import BaseModel
 
 from app.ifsr.fragmenter import Fragment
 from app.swcsa.role_escalation import role_escalation_score
+from app.swcsa.semantic_injection_similarity import semantic_injection_score
 
 _RULES_PATH = Path(__file__).parent / "rules" / "subintent_rules.yaml"
 
@@ -103,9 +111,10 @@ def classify(fragment: Fragment) -> RiskVerdict:
     """Judge a single fragment's risk level."""
     role_score, role_matched = role_escalation_score(fragment.text)
     subintent_score, subintent_matched = _score_subintent_rules(fragment.text)
+    semantic_score, semantic_matched = semantic_injection_score(fragment.text)
 
-    score = min(1.0, role_score + subintent_score)
-    matched = [*role_matched, *subintent_matched]
+    score = min(1.0, role_score + subintent_score + semantic_score)
+    matched = [*role_matched, *subintent_matched, *semantic_matched]
 
     if score >= MALICIOUS_THRESHOLD:
         risk: RiskLevel = "malicious"
