@@ -34,6 +34,7 @@ TokenType = Literal["access", "refresh"]
 
 _pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 _oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
+_oauth2_scheme_optional = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login", auto_error=False)
 
 
 def hash_password(password: str) -> str:
@@ -110,6 +111,22 @@ async def get_current_user(
         )
 
     return user
+
+
+async def get_current_user_optional(
+    token: str | None = Depends(_oauth2_scheme_optional),  # noqa: B008
+    session: AsyncSession = Depends(get_session),  # noqa: B008
+) -> User | None:
+    """Like `get_current_user`, but returns None instead of raising when
+    there's no token or it's invalid — for routes with a public path
+    (e.g. bootstrap registration) that only need to check the caller's
+    identity/role when one is actually present."""
+    if token is None:
+        return None
+    try:
+        return await get_current_user(token=token, session=session)
+    except HTTPException:
+        return None
 
 
 def require_role(*allowed_roles: UserRole):

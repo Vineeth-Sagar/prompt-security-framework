@@ -43,6 +43,7 @@ passlib[bcrypt]==1.7.4
 # (same class of issue as the numpy/thinc pin above).
 bcrypt==4.0.1
 python-multipart==0.0.9
+email-validator==2.3.0
 
 # --- dev / test / lint ---
 pytest==8.3.3
