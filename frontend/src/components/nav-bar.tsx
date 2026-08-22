@@ -28,9 +28,14 @@ export function NavBar() {
                 Playground
               </Link>
               {(user.role === "admin" || user.role === "analyst") && (
-                <Link href="/dashboard" className="text-muted-foreground hover:text-foreground">
-                  Dashboard
-                </Link>
+                <>
+                  <Link href="/dashboard" className="text-muted-foreground hover:text-foreground">
+                    Dashboard
+                  </Link>
+                  <Link href="/logs" className="text-muted-foreground hover:text-foreground">
+                    Logs
+                  </Link>
+                </>
               )}
               <span className="text-muted-foreground hidden sm:inline">
                 {user.email} · {user.role}
