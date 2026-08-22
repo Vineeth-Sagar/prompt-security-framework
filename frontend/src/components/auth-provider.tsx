@@ -35,11 +35,19 @@ const AuthContext = createContext<AuthContextValue | undefined>(undefined);
  */
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<UserPublic | null>(null);
-  // Lazy-initialized from localStorage so the no-token case starts
-  // already resolved (loading=false, user=null) without needing a
-  // setState call inside the mount effect below — only the "there's a
-  // token, go verify it" path actually needs to run asynchronously.
-  const [loading, setLoading] = useState<boolean>(() => hasStoredToken());
+  // Always starts true, on both the server render and the client's
+  // first (hydration) render — an earlier version lazy-initialized
+  // this from hasStoredToken() to skip straight to loading=false when
+  // there's no token, which seemed like a harmless optimization but
+  // isn't: localStorage is client-only, so the server always computes
+  // false while the client can compute true, and React requires a
+  // component's first client render to match the server-rendered HTML
+  // exactly. That mismatch corrupted hydration for every consumer of
+  // this value (e.g. nav-bar.tsx renders a completely different DOM
+  // shape for loading/signed-out/signed-in), not just this component.
+  // Resolved to the real value in the effect below instead, which only
+  // ever runs client-side, after hydration has already succeeded.
+  const [loading, setLoading] = useState(true);
 
   const refresh = useCallback(async () => {
     try {
@@ -65,7 +73,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     let ignore = false;
 
     async function verifyStoredToken() {
-      if (!hasStoredToken()) return;
+      if (!hasStoredToken()) {
+        // Still await something before setState, even though there's
+        // no real async work to do — keeps this branch's setState
+        // provably post-microtask too, not just the token-present one.
+        await Promise.resolve();
+        if (!ignore) setLoading(false);
+        return;
+      }
       await refresh();
     }
 
