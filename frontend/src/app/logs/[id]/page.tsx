@@ -4,7 +4,8 @@ import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 
-import { RequireRole } from "@/components/require-role";
+import { RequireAuth } from "@/components/require-auth";
+import { useAuth } from "@/components/auth-provider";
 import { ApiError, getLog } from "@/lib/api-client";
 import type { DecisionLogPublic, DriftBreakdown, PolicyAction } from "@/lib/types";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -47,14 +48,22 @@ const STAGE_ORDER = [
 ];
 
 export default function LogDetailPage() {
+  // Every authenticated user can reach this page — the backend already
+  // 404s a non-admin fetching a log id they don't own (app/api/routes/
+  // logs.py's get_log), so the actual access boundary is enforced
+  // server-side, not by gating the route to admin/analyst here. That
+  // also matters because the Playground's "View full trace" link points
+  // here, and viewers use the Playground too.
   return (
-    <RequireRole roles={["admin", "analyst"]}>
+    <RequireAuth>
       <LogDetailContent />
-    </RequireRole>
+    </RequireAuth>
   );
 }
 
 function LogDetailContent() {
+  const { user } = useAuth();
+  const isAdmin = user?.role === "admin";
   const params = useParams<{ id: string }>();
   const [log, setLog] = useState<DecisionLogPublic | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -130,6 +139,12 @@ function LogDetailContent() {
               <CardDescription>
                 Session <code>{log.session_id}</code> · {log.input_modality} ·{" "}
                 {new Date(log.created_at).toLocaleString()}
+                {isAdmin && (
+                  <>
+                    {" "}
+                    · {log.user_email ?? <span className="italic">unattributed</span>}
+                  </>
+                )}
               </CardDescription>
             </CardHeader>
             <CardContent>

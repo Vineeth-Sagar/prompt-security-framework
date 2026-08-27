@@ -129,6 +129,8 @@ export interface PipelineResult {
 export interface DecisionLogPublic {
   id: number;
   session_id: string;
+  user_id: number | null;
+  user_email: string | null;
   input_modality: string;
   drift_breakdown: DriftBreakdown;
   ifsr_result: ReconstructionResult;
@@ -148,6 +150,8 @@ export interface PaginatedLogs {
 
 export interface LogFilters {
   session_id?: string;
+  /** Admin-only: filter to one user's decisions (ignored server-side for non-admins). */
+  user_id?: number;
   action?: PolicyAction;
   start_date?: string;
   end_date?: string;
@@ -161,6 +165,8 @@ export interface LogFilters {
 export interface LiveDecisionEvent {
   id: number;
   session_id: string;
+  user_id: number | null;
+  user_email: string | null;
   input_modality: string;
   policy_action: PolicyAction;
   matched_rule: string;

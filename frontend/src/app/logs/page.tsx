@@ -4,9 +4,10 @@ import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
 import Link from "next/link";
 
-import { RequireRole } from "@/components/require-role";
-import { ApiError, listLogs } from "@/lib/api-client";
-import type { DecisionLogPublic, PolicyAction } from "@/lib/types";
+import { RequireAuth } from "@/components/require-auth";
+import { useAuth } from "@/components/auth-provider";
+import { ApiError, listLogs, listUsers } from "@/lib/api-client";
+import type { DecisionLogPublic, PolicyAction, UserPublic } from "@/lib/types";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -41,21 +42,36 @@ const PAGE_SIZE = 25;
 interface Filters {
   sessionId: string;
   action: PolicyAction | "any";
+  userId: string; // user id as string, or "all" (admin-only filter)
   startDate: string; // yyyy-mm-dd, or ""
   endDate: string; // yyyy-mm-dd, or ""
 }
 
-const EMPTY_FILTERS: Filters = { sessionId: "", action: "any", startDate: "", endDate: "" };
+const EMPTY_FILTERS: Filters = {
+  sessionId: "",
+  action: "any",
+  userId: "all",
+  startDate: "",
+  endDate: "",
+};
 
 export default function LogsPage() {
+  // Every authenticated user can reach this page now; the backend scopes
+  // what they actually see (a viewer/analyst gets only their own
+  // decisions, an admin gets everyone's). So the gate is just "logged
+  // in", not a role check — the old admin/analyst RequireRole would have
+  // wrongly kept viewers out of their own audit trail.
   return (
-    <RequireRole roles={["admin", "analyst"]}>
+    <RequireAuth>
       <LogsContent />
-    </RequireRole>
+    </RequireAuth>
   );
 }
 
 function LogsContent() {
+  const { user } = useAuth();
+  const isAdmin = user?.role === "admin";
+
   const [pendingFilters, setPendingFilters] = useState<Filters>(EMPTY_FILTERS);
   const [appliedFilters, setAppliedFilters] = useState<Filters>(EMPTY_FILTERS);
   const [offset, setOffset] = useState(0);
@@ -63,6 +79,27 @@ function LogsContent() {
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Populated only for admins — the "filter by user" dropdown. Non-admins
+  // never see it (and the backend would ignore user_id from them anyway).
+  const [users, setUsers] = useState<UserPublic[]>([]);
+
+  useEffect(() => {
+    if (!isAdmin) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const result = await listUsers();
+        if (!cancelled) setUsers(result);
+      } catch {
+        // A failed user-list only costs the admin the convenience
+        // dropdown; the log table itself still loads. Leave it empty
+        // rather than surfacing an error over the whole page.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isAdmin]);
 
   useEffect(() => {
     let cancelled = false;
@@ -74,6 +111,8 @@ function LogsContent() {
         const result = await listLogs({
           session_id: appliedFilters.sessionId || undefined,
           action: appliedFilters.action === "any" ? undefined : appliedFilters.action,
+          user_id:
+            appliedFilters.userId === "all" ? undefined : Number(appliedFilters.userId),
           start_date: appliedFilters.startDate || undefined,
           end_date: appliedFilters.endDate || undefined,
           limit: PAGE_SIZE,
@@ -119,7 +158,9 @@ function LogsContent() {
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">Audit Log</h1>
         <p className="text-muted-foreground text-sm">
-          Search and filter every decision the pipeline has made.
+          {isAdmin
+            ? "Search and filter every decision the pipeline has made, across all users."
+            : "Search and filter the decisions you have run."}
         </p>
       </div>
 
@@ -161,6 +202,30 @@ function LogsContent() {
                 </SelectContent>
               </Select>
             </div>
+
+            {isAdmin && (
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="filter-user">User</Label>
+                <Select
+                  value={pendingFilters.userId}
+                  onValueChange={(value) =>
+                    setPendingFilters((prev) => ({ ...prev, userId: value ?? "all" }))
+                  }
+                >
+                  <SelectTrigger id="filter-user" className="w-56">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All users</SelectItem>
+                    {users.map((u) => (
+                      <SelectItem key={u.id} value={String(u.id)}>
+                        {u.email}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
 
             <div className="flex flex-col gap-2">
               <Label htmlFor="filter-start">From</Label>
@@ -226,6 +291,7 @@ function LogsContent() {
                   <TableHeader>
                     <TableRow>
                       <TableHead>Time</TableHead>
+                      {isAdmin && <TableHead>User</TableHead>}
                       <TableHead>Session</TableHead>
                       <TableHead>Modality</TableHead>
                       <TableHead>Action</TableHead>
@@ -238,6 +304,13 @@ function LogsContent() {
                         <TableCell className="text-muted-foreground whitespace-nowrap">
                           {new Date(log.created_at).toLocaleString()}
                         </TableCell>
+                        {isAdmin && (
+                          <TableCell className="max-w-40 truncate text-xs">
+                            {log.user_email ?? (
+                              <span className="text-muted-foreground italic">unattributed</span>
+                            )}
+                          </TableCell>
+                        )}
                         <TableCell className="max-w-40 truncate font-mono text-xs">
                           {log.session_id}
                         </TableCell>

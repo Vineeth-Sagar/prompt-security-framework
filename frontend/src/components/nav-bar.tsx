@@ -28,15 +28,17 @@ export function NavBar() {
                 Playground
               </Link>
               {(user.role === "admin" || user.role === "analyst") && (
-                <>
-                  <Link href="/dashboard" className="text-muted-foreground hover:text-foreground">
-                    Dashboard
-                  </Link>
-                  <Link href="/logs" className="text-muted-foreground hover:text-foreground">
-                    Logs
-                  </Link>
-                </>
+                <Link href="/dashboard" className="text-muted-foreground hover:text-foreground">
+                  Dashboard
+                </Link>
               )}
+              {/* Logs is available to every role now — the page scopes a
+                  viewer/analyst to their own decisions server-side.
+                  Dashboard (the live WS feed) stays admin/analyst, since
+                  the WS route rejects viewer tokens. */}
+              <Link href="/logs" className="text-muted-foreground hover:text-foreground">
+                Logs
+              </Link>
               {user.role === "admin" && (
                 <Link href="/admin" className="text-muted-foreground hover:text-foreground">
                   Admin

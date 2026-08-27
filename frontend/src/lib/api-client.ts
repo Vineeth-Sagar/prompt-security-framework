@@ -261,6 +261,9 @@ export async function listLogs(filters: LogFilters = {}): Promise<PaginatedLogs>
     searchParams: {
       session_id: filters.session_id,
       action: filters.action,
+      // Only meaningful for admins; the backend ignores it for other
+      // roles (they're hard-scoped to their own decisions server-side).
+      user_id: filters.user_id,
       start_date: filters.start_date,
       end_date: filters.end_date,
       limit: filters.limit,
