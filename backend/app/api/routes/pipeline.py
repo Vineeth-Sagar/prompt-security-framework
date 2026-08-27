@@ -35,6 +35,7 @@ from app.db import get_session
 from app.input_layer.router import resolve_modality
 from app.llm_gateway.base import (
     BaseLLMAdapter,
+    LLMDailyQuotaExceededError,
     LLMRateLimitExceededError,
     LLMTimeoutError,
 )
@@ -97,6 +98,22 @@ async def run(
         # handlers may instead raise HTTPException directly for
         # undecodable bytes — that propagates through FastAPI unchanged.
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except LLMDailyQuotaExceededError as exc:
+        # Separate from the rate-limit branch below on purpose: this one
+        # does NOT clear by waiting a few seconds, so saying so would
+        # send the user into a pointless retry loop. 429 rather than
+        # 503 — the quota belongs to this deployment's API key, so it's
+        # a "you've used your allowance" condition, not an upstream
+        # outage.
+        raise HTTPException(
+            status_code=429,
+            detail=(
+                f"{exc} — the target LLM provider's daily request allowance for this "
+                "API key is spent, so retrying now will not help. The prompt was "
+                "analysed and logged; only the LLM answer is missing. Wait for the "
+                "quota to reset, or switch TARGET_LLM_PROVIDER / the configured model."
+            ),
+        ) from exc
     except LLMRateLimitExceededError as exc:
         # The target LLM is a third-party dependency, so its transient
         # failures are *upstream* failures, not bugs in this service —

@@ -13,6 +13,7 @@ from app.context_buffer.redis_buffer import ContextBuffer, get_context_buffer
 from app.db import get_session
 from app.llm_gateway.base import (
     BaseLLMAdapter,
+    LLMDailyQuotaExceededError,
     LLMRateLimitExceededError,
     LLMResponse,
     LLMTimeoutError,
@@ -328,3 +329,34 @@ async def test_blocked_prompt_still_succeeds_when_the_llm_would_fail(client, moc
 
     assert response.status_code == 200
     assert response.json()["policy"]["action"] == "BLOCK"
+
+
+@pytest.mark.asyncio
+async def test_llm_daily_quota_returns_429_and_says_retrying_wont_help(client, mock_llm_adapter):
+    # Distinct from the 503 rate-limit case above: a spent daily quota
+    # doesn't clear in "a few seconds", so the response must not imply
+    # it does. 429 rather than 503 because the exhausted allowance
+    # belongs to this deployment's own API key.
+    ac, _buffer = client
+    token = await _register_and_login(ac, "dailyquota@example.com", "password123")
+    mock_llm_adapter.generate = AsyncMock(
+        side_effect=LLMDailyQuotaExceededError(
+            "Daily quota exhausted for gemini-3.6-flash (limit: 20/day)"
+        )
+    )
+
+    response = await ac.post(
+        "/api/v1/pipeline/run",
+        files={"file": ("prompt.txt", b"what is the capital of France?", "text/plain")},
+        data={"modality": "text", "session_id": "quota-session"},
+        headers=_auth_header(token),
+    )
+
+    assert response.status_code == 429
+    detail = response.json()["detail"]
+    assert "daily" in detail.lower()
+    assert "will not help" in detail.lower()
+    # The prompt really was analysed and logged — saying so is the
+    # difference between "the tool is broken" and "only the answer is
+    # missing".
+    assert "analysed and logged" in detail.lower()

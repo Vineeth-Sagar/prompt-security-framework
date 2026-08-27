@@ -13,16 +13,61 @@ from typing import Any
 
 from google import genai
 from google.genai import errors as genai_errors
+from google.genai import types as genai_types
 
 from app.config import get_settings
 from app.llm_gateway.base import (
     BaseLLMAdapter,
+    LLMDailyQuotaExceededError,
     LLMRateLimitExceededError,
     LLMResponse,
     LLMTimeoutError,
 )
 
 RATE_LIMIT_STATUS_CODE = 429
+
+# Google returns per-day and per-minute exhaustion under the same 429,
+# distinguishable only by the quota id in the error body (e.g.
+# "GenerateRequestsPerDayPerProjectPerModel-FreeTier" vs the per-minute
+# equivalent). Matched on "PerDay" rather than the full id so a tier
+# rename doesn't silently turn daily-quota errors back into retryable
+# ones.
+_DAILY_QUOTA_MARKER = "perday"
+
+
+def _violations(exc: genai_errors.ClientError) -> list[dict]:
+    """Best-effort extraction of the QuotaFailure violations block.
+
+    Defensive throughout: this parses a third-party error payload whose
+    exact shape isn't guaranteed, and a parsing slip here must not mask
+    the rate-limit error itself.
+    """
+    details = exc.details if isinstance(getattr(exc, "details", None), dict) else {}
+    error = details.get("error") if isinstance(details.get("error"), dict) else {}
+    found: list[dict] = []
+    for detail in error.get("details", []) or []:
+        if isinstance(detail, dict) and isinstance(detail.get("violations"), list):
+            found.extend(v for v in detail["violations"] if isinstance(v, dict))
+    return found
+
+
+def _is_daily_quota_error(exc: genai_errors.ClientError) -> bool:
+    """True when the 429 is a per-day quota, which backoff cannot clear."""
+    for violation in _violations(exc):
+        if _DAILY_QUOTA_MARKER in str(violation.get("quotaId", "")).lower():
+            return True
+    return False
+
+
+def _quota_message(exc: genai_errors.ClientError) -> str:
+    for violation in _violations(exc):
+        quota_id = str(violation.get("quotaId", ""))
+        if _DAILY_QUOTA_MARKER in quota_id.lower():
+            limit = violation.get("quotaValue")
+            model = (violation.get("quotaDimensions") or {}).get("model", "the model")
+            limit_text = f" (limit: {limit}/day)" if limit else ""
+            return f"Daily quota exhausted for {model}{limit_text}"
+    return "Daily quota exhausted"
 
 
 class GeminiAdapter(BaseLLMAdapter):
@@ -35,6 +80,8 @@ class GeminiAdapter(BaseLLMAdapter):
         model: str | None = None,
         max_retries: int | None = None,
         timeout_seconds: float | None = None,
+        max_output_tokens: int | None = None,
+        thinking_level: str | None = None,
     ):
         """
         Args:
@@ -43,10 +90,11 @@ class GeminiAdapter(BaseLLMAdapter):
                 fresh client built from `api_key`/settings.
             api_key: Overrides settings.gemini_api_key when `client`
                 isn't given.
-            model, max_retries, timeout_seconds: Override the
-                corresponding setting; each defaults to
-                settings.gemini_model / llm_max_retries /
-                llm_timeout_seconds.
+            model, max_retries, timeout_seconds, max_output_tokens,
+                thinking_level: Override the corresponding setting; each
+                defaults to settings.gemini_model / llm_max_retries /
+                llm_timeout_seconds / llm_max_output_tokens /
+                gemini_thinking_level.
         """
         settings = get_settings()
         self._client = client if client is not None else genai.Client(
@@ -56,6 +104,12 @@ class GeminiAdapter(BaseLLMAdapter):
         self._max_retries = max_retries if max_retries is not None else settings.llm_max_retries
         self._timeout_seconds = (
             timeout_seconds if timeout_seconds is not None else settings.llm_timeout_seconds
+        )
+        self._max_output_tokens = (
+            max_output_tokens if max_output_tokens is not None else settings.llm_max_output_tokens
+        )
+        self._thinking_level = (
+            thinking_level if thinking_level is not None else settings.gemini_thinking_level
         )
 
     async def generate(self, prompt: str, **kwargs: Any) -> LLMResponse:
@@ -69,13 +123,19 @@ class GeminiAdapter(BaseLLMAdapter):
         """
         start = time.perf_counter()
         model = kwargs.get("model", self._model)
+        config = genai_types.GenerateContentConfig(
+            max_output_tokens=self._max_output_tokens,
+            thinking_config=genai_types.ThinkingConfig(thinking_level=self._thinking_level),
+        )
 
         last_error: genai_errors.ClientError | None = None
 
         for attempt in range(self._max_retries + 1):
             try:
                 response = await asyncio.wait_for(
-                    self._client.aio.models.generate_content(model=model, contents=prompt),
+                    self._client.aio.models.generate_content(
+                        model=model, contents=prompt, config=config
+                    ),
                     timeout=self._timeout_seconds,
                 )
             except TimeoutError as exc:
@@ -86,6 +146,16 @@ class GeminiAdapter(BaseLLMAdapter):
                 if exc.code != RATE_LIMIT_STATUS_CODE:
                     raise
                 last_error = exc
+                # A *per-day* quota exhaustion is not something backoff
+                # can clear — the window is hours wide, so retrying just
+                # burns more of an already-spent quota and delays the
+                # error the caller needs to see. Observed live on
+                # Gemini's free tier (limit: 20 requests/day/model),
+                # where the old unconditional backoff turned an
+                # immediate, actionable "daily quota gone" into ~7s of
+                # pointless waiting plus 3 extra billed attempts.
+                if _is_daily_quota_error(exc):
+                    raise LLMDailyQuotaExceededError(_quota_message(exc)) from exc
                 if attempt < self._max_retries:
                     # Exponential backoff: 1s, 2s, 4s, ...
                     await asyncio.sleep(2**attempt)

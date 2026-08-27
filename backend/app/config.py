@@ -46,6 +46,19 @@ class Settings(BaseSettings):
     gemini_model: str = "gemini-3.6-flash"
     llm_timeout_seconds: float = 30.0
     llm_max_retries: int = 3
+    # Bounds on what the *target* LLM produces. This project's target
+    # LLM exists to give output governance something realistic to
+    # govern, not to be a general-purpose assistant, so an unbounded
+    # essay costs latency without adding demonstration value. Measured
+    # before setting these: unbounded gemini-3.6-flash replies to
+    # ordinary Playground prompts ran 4s / 13s / 25s / 27s against a 30s
+    # timeout, i.e. drifting into 504 territory purely on response
+    # length and thinking time.
+    llm_max_output_tokens: int = 800
+    # gemini-3.x models think by default; "LOW" keeps some reasoning
+    # without paying HIGH's latency on every Playground submission.
+    # One of MINIMAL / LOW / MEDIUM / HIGH.
+    gemini_thinking_level: str = "LOW"
 
     # --- SWCSA tuning (swcsa phase) ---
     drift_threshold: float = 0.8

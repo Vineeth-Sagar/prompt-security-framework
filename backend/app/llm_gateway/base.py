@@ -26,6 +26,19 @@ class LLMRateLimitExceededError(Exception):
     """Raised when retries on repeated rate-limit (429) responses are exhausted."""
 
 
+class LLMDailyQuotaExceededError(Exception):
+    """Raised when the provider's *per-day* quota is spent.
+
+    Deliberately distinct from LLMRateLimitExceededError even though the
+    provider signals both with a 429: a per-minute throttle clears on
+    its own in seconds and is worth retrying, while a daily quota does
+    not clear until the quota window rolls over. Telling a user to "wait
+    a few seconds and try again" when their daily allowance is gone is
+    actively misleading, and retrying internally just spends more of an
+    already-exhausted quota.
+    """
+
+
 class LLMResponse(BaseModel):
     """Normalized response from any target LLM.
 

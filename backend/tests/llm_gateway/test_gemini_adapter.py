@@ -3,7 +3,11 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from google.genai import errors as genai_errors
 
-from app.llm_gateway.base import LLMRateLimitExceededError, LLMTimeoutError
+from app.llm_gateway.base import (
+    LLMDailyQuotaExceededError,
+    LLMRateLimitExceededError,
+    LLMTimeoutError,
+)
 from app.llm_gateway.gemini_adapter import GeminiAdapter
 
 
@@ -167,3 +171,138 @@ async def test_model_can_be_overridden_per_call():
 
     _, kwargs = mock_generate.call_args
     assert kwargs["model"] == "gemini-3.6-pro"
+
+
+# --- per-day quota exhaustion is NOT a retryable rate limit ---
+#
+# Observed live on Gemini's free tier (limit: 20 requests/day/model).
+# Google signals per-day and per-minute exhaustion with the same 429,
+# distinguishable only by the quota id inside the error body. Treating
+# the daily one as retryable meant ~7s of exponential backoff that could
+# not possibly succeed, three extra requests against an already-spent
+# quota, and finally a message telling the user to "wait a few seconds
+# and submit again" — advice that is wrong by hours.
+
+
+def _make_daily_quota_error() -> genai_errors.ClientError:
+    return genai_errors.ClientError(
+        429,
+        {
+            "error": {
+                "code": 429,
+                "message": "You exceeded your current quota",
+                "status": "RESOURCE_EXHAUSTED",
+                "details": [
+                    {
+                        "@type": "type.googleapis.com/google.rpc.QuotaFailure",
+                        "violations": [
+                            {
+                                "quotaMetric": (
+                                    "generativelanguage.googleapis.com/"
+                                    "generate_content_free_tier_requests"
+                                ),
+                                "quotaId": ("GenerateRequestsPerDayPerProjectPerModel-FreeTier"),
+                                "quotaDimensions": {"model": "gemini-3.6-flash"},
+                                "quotaValue": "20",
+                            }
+                        ],
+                    }
+                ],
+            }
+        },
+    )
+
+
+def _make_per_minute_quota_error() -> genai_errors.ClientError:
+    return genai_errors.ClientError(
+        429,
+        {
+            "error": {
+                "code": 429,
+                "message": "You exceeded your current quota",
+                "details": [
+                    {
+                        "@type": "type.googleapis.com/google.rpc.QuotaFailure",
+                        "violations": [
+                            {
+                                "quotaId": ("GenerateRequestsPerMinutePerProjectPerModel-FreeTier"),
+                                "quotaValue": "10",
+                            }
+                        ],
+                    }
+                ],
+            }
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_daily_quota_error_raises_distinct_type_without_retrying():
+    mock_generate = AsyncMock(side_effect=_make_daily_quota_error())
+    adapter = GeminiAdapter(client=_make_mock_client(mock_generate), max_retries=3)
+
+    with pytest.raises(LLMDailyQuotaExceededError):
+        await adapter.generate("hello")
+
+    # The whole point: no backoff loop against a quota that can't clear.
+    assert mock_generate.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_daily_quota_message_names_the_model_and_limit():
+    adapter = GeminiAdapter(
+        client=_make_mock_client(AsyncMock(side_effect=_make_daily_quota_error()))
+    )
+
+    with pytest.raises(LLMDailyQuotaExceededError) as excinfo:
+        await adapter.generate("hello")
+
+    message = str(excinfo.value)
+    assert "gemini-3.6-flash" in message
+    assert "20" in message
+
+
+@pytest.mark.asyncio
+async def test_per_minute_quota_error_is_still_retried():
+    # The complement, so the fix can't silently turn every 429 into a
+    # non-retryable one: a per-minute throttle genuinely does clear.
+    mock_generate = AsyncMock(side_effect=_make_per_minute_quota_error())
+    adapter = GeminiAdapter(client=_make_mock_client(mock_generate), max_retries=2)
+
+    with pytest.raises(LLMRateLimitExceededError):
+        await adapter.generate("hello")
+
+    assert mock_generate.await_count == 3
+
+
+@pytest.mark.asyncio
+async def test_malformed_429_body_falls_back_to_retryable_rate_limit():
+    # Defensive: this parses a third-party payload whose shape isn't
+    # guaranteed. A parsing miss must degrade to the old retry
+    # behaviour, never crash the adapter.
+    mock_generate = AsyncMock(side_effect=_make_client_error(429))
+    adapter = GeminiAdapter(client=_make_mock_client(mock_generate), max_retries=1)
+
+    with pytest.raises(LLMRateLimitExceededError):
+        await adapter.generate("hello")
+
+    assert mock_generate.await_count == 2
+
+
+# --- generation is bounded, so a long answer can't drift into a 504 ---
+
+
+@pytest.mark.asyncio
+async def test_generate_bounds_output_tokens_and_thinking_level():
+    mock_generate = AsyncMock(return_value=_make_mock_response())
+    adapter = GeminiAdapter(
+        client=_make_mock_client(mock_generate),
+        max_output_tokens=256,
+        thinking_level="MINIMAL",
+    )
+
+    await adapter.generate("hello")
+
+    config = mock_generate.await_args.kwargs["config"]
+    assert config.max_output_tokens == 256
+    assert config.thinking_config.thinking_level == "MINIMAL"
