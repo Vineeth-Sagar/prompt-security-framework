@@ -135,7 +135,18 @@ function PlaygroundContent() {
       if (err instanceof ApiError) {
         setError(String(err.detail ?? err.message));
       } else {
-        setError("Could not reach the server.");
+        // Deliberately hedged rather than asserting the server is down.
+        // fetch() rejects identically whether the backend is genuinely
+        // unreachable or it answered with a response the browser
+        // refused to expose (a 500 that lost its CORS headers did
+        // exactly this, and the flat "Could not reach the server."
+        // this replaces sent debugging in the wrong direction for a
+        // while). The prompt may well have been processed and logged.
+        setError(
+          "The request did not complete. The backend may be unreachable, or it " +
+            "returned a response the browser could not read — check the Logs page " +
+            "to see whether this prompt was in fact processed, then try again."
+        );
       }
     } finally {
       setSubmitting(false);

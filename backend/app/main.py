@@ -1,11 +1,19 @@
 """FastAPI entrypoint.
 
 Route modules are mounted here as later phases add them
-(backend/app/api/routes/). For now this exposes only a liveness endpoint.
+(backend/app/api/routes/).
+
+Middleware order matters here and is deliberate — see
+`catch_unhandled_errors` below for why an error-catching middleware has
+to sit inside the CORS layer rather than being registered as a normal
+exception handler.
 """
 
-from fastapi import FastAPI
+import logging
+
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app.api.routes.auth import router as auth_router
 from app.api.routes.input import router as input_router
@@ -25,6 +33,49 @@ app = FastAPI(
     ),
     version=settings.app_version,
 )
+
+logger = logging.getLogger(__name__)
+
+
+# Registered BEFORE CORSMiddleware, which means it ends up *inside* it:
+# Starlette builds the stack so that the most recently added middleware
+# is outermost, so CORS wraps this, and this wraps the router.
+#
+# That ordering is the entire point. Starlette's own
+# ServerErrorMiddleware — the thing that turns an unhandled exception
+# into a 500 — sits outside every user middleware, CORS included, so a
+# 500 it produces has no `access-control-allow-origin` header. A browser
+# will not expose such a response to JS at all: `fetch()` rejects with a
+# TypeError that is indistinguishable from the server being down, and
+# that is exactly how a real server-side error got reported on the
+# Playground as "Could not reach the server." while /health was
+# simultaneously returning 200 from the same page.
+#
+# Note a handler registered via `app.add_exception_handler(Exception,...)`
+# does NOT work here: Starlette deliberately routes Exception/500
+# handlers to ServerErrorMiddleware, i.e. back outside CORS. Catching in
+# a middleware inside the CORS layer is what makes the response
+# CORS-visible.
+@app.middleware("http")
+async def catch_unhandled_errors(request: Request, call_next):
+    try:
+        return await call_next(request)
+    except Exception:
+        # Logged with the full traceback server-side; the client gets a
+        # generic message, since exception text can carry internals
+        # (connection strings, file paths) that don't belong in an API
+        # response.
+        logger.exception("Unhandled error handling %s %s", request.method, request.url.path)
+        return JSONResponse(
+            status_code=500,
+            content={
+                "detail": (
+                    "The server hit an unexpected error handling this request. "
+                    "It has been logged. Please try again."
+                )
+            },
+        )
+
 
 app.add_middleware(
     CORSMiddleware,
