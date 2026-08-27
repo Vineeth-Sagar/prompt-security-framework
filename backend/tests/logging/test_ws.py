@@ -70,9 +70,7 @@ def client(engine, fake_redis):
 
 def _register_and_login(client: TestClient, email: str, password: str) -> dict:
     client.post("/api/v1/auth/register", json={"email": email, "password": password})
-    response = client.post(
-        "/api/v1/auth/login", data={"username": email, "password": password}
-    )
+    response = client.post("/api/v1/auth/login", data={"username": email, "password": password})
     return response.json()
 
 
@@ -99,9 +97,7 @@ def test_connection_with_valid_admin_token_receives_broadcast_event(
         event = {"id": 1, "session_id": "sess-1", "policy_action": "PASS"}
 
         loop = asyncio.new_event_loop()
-        loop.run_until_complete(
-            fake_redis.publish(LIVE_DECISIONS_CHANNEL, json.dumps(event))
-        )
+        loop.run_until_complete(fake_redis.publish(LIVE_DECISIONS_CHANNEL, json.dumps(event)))
         loop.close()
 
         received = websocket.receive_text()
@@ -118,7 +114,47 @@ def test_viewer_role_is_rejected_from_the_live_feed(client: TestClient):
     viewer_tokens = _register_and_login(client, "viewer@example.com", "viewerpass123")
 
     with pytest.raises(WebSocketDisconnect):
-        with client.websocket_connect(
-            f"/ws/live-decisions?token={viewer_tokens['access_token']}"
-        ):
+        with client.websocket_connect(f"/ws/live-decisions?token={viewer_tokens['access_token']}"):
             pass
+
+
+def _create_analyst(client: TestClient, admin_tokens: dict, email: str) -> dict:
+    response = client.post(
+        "/api/v1/auth/register",
+        json={"email": email, "password": "analystpass123", "role": "analyst"},
+        headers={"Authorization": f"Bearer {admin_tokens['access_token']}"},
+    )
+    return response.json()
+
+
+def test_analyst_live_feed_receives_only_their_own_events(
+    client: TestClient, fake_redis: FakeAsyncRedis
+):
+    # The live-feed counterpart of the logs scoping: an analyst's socket
+    # must not receive another user's decision events. Publishes one
+    # foreign event then one of the analyst's own; the analyst must see
+    # only the second, proving the first was filtered rather than merely
+    # delayed.
+    admin_tokens = _register_and_login(client, "admin@example.com", "adminpass123")
+    analyst = _create_analyst(client, admin_tokens, "ana@example.com")
+    analyst_tokens = _register_and_login(client, "ana@example.com", "analystpass123")
+
+    with client.websocket_connect(
+        f"/ws/live-decisions?token={analyst_tokens['access_token']}"
+    ) as websocket:
+        foreign = {"id": 1, "session_id": "x", "user_id": 999, "policy_action": "PASS"}
+        mine = {
+            "id": 2,
+            "session_id": "y",
+            "user_id": analyst["id"],
+            "policy_action": "BLOCK",
+        }
+
+        loop = asyncio.new_event_loop()
+        loop.run_until_complete(fake_redis.publish(LIVE_DECISIONS_CHANNEL, json.dumps(foreign)))
+        loop.run_until_complete(fake_redis.publish(LIVE_DECISIONS_CHANNEL, json.dumps(mine)))
+        loop.close()
+
+        received = json.loads(websocket.receive_text())
+        assert received["id"] == 2  # the foreign event was skipped
+        assert received["user_id"] == analyst["id"]

@@ -132,6 +132,8 @@ async def run_pipeline(
     buffer: ContextBuffer | None = None,
     llm_adapter: BaseLLMAdapter | None = None,
     db_session: AsyncSession | None = None,
+    user_id: int | None = None,
+    user_email: str | None = None,
 ) -> PipelineResult:
     """Run `raw_input` through the full pipeline for `session_id`.
 
@@ -153,6 +155,10 @@ async def run_pipeline(
             defaulting to a fresh session from the process-wide engine
             — overridable so tests can point logging at an in-memory
             SQLite database instead of real Postgres.
+        user_id, user_email: The authenticated user who submitted this
+            run, recorded on the decision log so the audit view can be
+            scoped per-user. Both default to None for unattributed
+            callers (tests, eval scripts).
     """
     stage_timings: list[StageTiming] = []
     pipeline_start = time.perf_counter()
@@ -251,10 +257,22 @@ async def run_pipeline(
     # buffer for tests also redirects decision-log broadcasts — one
     # Redis connection to override, not two.
     if db_session is not None:
-        log = await log_decision(pipeline_result, db_session, redis_client=buffer.client)
+        log = await log_decision(
+            pipeline_result,
+            db_session,
+            redis_client=buffer.client,
+            user_id=user_id,
+            user_email=user_email,
+        )
     else:
         async with AsyncSession(get_engine()) as session:
-            log = await log_decision(pipeline_result, session, redis_client=buffer.client)
+            log = await log_decision(
+                pipeline_result,
+                session,
+                redis_client=buffer.client,
+                user_id=user_id,
+                user_email=user_email,
+            )
     pipeline_result.log_id = log.id
 
     return pipeline_result

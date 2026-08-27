@@ -76,6 +76,41 @@ def _auth_header(access_token: str) -> dict:
     return {"Authorization": f"Bearer {access_token}"}
 
 
+async def _seed_logs_for_user(engine, user_id: int | None, user_email: str | None, count: int = 1):
+    """Seed `count` decision logs attributed to one user (or unattributed
+    when user_id is None) — the fixture the per-user scoping tests need."""
+    async with AsyncSession(engine) as session:
+        for i in range(count):
+            session.add(
+                DecisionLog(
+                    session_id=f"{user_email or 'anon'}-sess-{i}",
+                    user_id=user_id,
+                    user_email=user_email,
+                    input_modality="text",
+                    drift_breakdown={"aggregate": 0.1},
+                    ifsr_result={"blocked": False},
+                    policy_action="PASS",
+                    matched_rule="rule_x",
+                    pii_found=[],
+                    latency_ms_per_stage={"total": 1.0},
+                    created_at=datetime.now(UTC) - timedelta(minutes=i),
+                )
+            )
+        await session.commit()
+
+
+async def _register_role(client: AsyncClient, admin_tokens: dict, email: str, role: str) -> dict:
+    """Admin-create a user with `role` and return the created row
+    (including its `id`, needed to attribute seeded logs)."""
+    response = await client.post(
+        "/api/v1/auth/register",
+        json={"email": email, "password": f"{role}pass123", "role": role},
+        headers=_auth_header(admin_tokens["access_token"]),
+    )
+    assert response.status_code == 201
+    return response.json()
+
+
 # --- pagination ---
 
 
@@ -181,8 +216,7 @@ async def test_combined_filters(client: AsyncClient, engine):
 
     body = response.json()
     assert all(
-        item["session_id"] == "sess-0" and item["policy_action"] == "PASS"
-        for item in body["items"]
+        item["session_id"] == "sess-0" and item["policy_action"] == "PASS" for item in body["items"]
     )
 
 
@@ -209,9 +243,7 @@ async def test_get_log_by_id_returns_full_detail(client: AsyncClient, engine):
 async def test_get_nonexistent_log_returns_404(client: AsyncClient):
     tokens = await _register_and_login(client, "admin@example.com", "adminpass123")
 
-    response = await client.get(
-        "/api/v1/logs/999999", headers=_auth_header(tokens["access_token"])
-    )
+    response = await client.get("/api/v1/logs/999999", headers=_auth_header(tokens["access_token"]))
 
     assert response.status_code == 404
 
@@ -227,22 +259,26 @@ async def test_unauthenticated_request_is_rejected(client: AsyncClient):
 
 
 @pytest.mark.asyncio
-async def test_viewer_role_is_blocked_from_logs(client: AsyncClient):
+async def test_viewer_can_read_logs_but_only_their_own(client: AsyncClient, engine):
+    # Policy change: viewers used to be blocked from /logs entirely. They
+    # now get access, but strictly scoped to decisions they themselves
+    # ran — so this asserts both halves: 200 (not 403), and that a
+    # decision owned by someone else is invisible to them.
     admin_tokens = await _register_and_login(client, "admin@example.com", "adminpass123")
-    await client.post(
-        "/api/v1/auth/register",
-        json={"email": "viewer@example.com", "password": "viewerpass123", "role": "viewer"},
-        headers=_auth_header(admin_tokens["access_token"]),
-    )
+    viewer = await _register_role(client, admin_tokens, "viewer@example.com", "viewer")
+    await _seed_logs_for_user(engine, user_id=viewer["id"], user_email=viewer["email"], count=2)
+    # A decision owned by a different user must not appear.
+    await _seed_logs_for_user(engine, user_id=999, user_email="someone-else@example.com", count=3)
+
     viewer_tokens = await _register_and_login(
         client, "viewer@example.com", "viewerpass123", role="viewer"
     )
+    response = await client.get("/api/v1/logs", headers=_auth_header(viewer_tokens["access_token"]))
 
-    response = await client.get(
-        "/api/v1/logs", headers=_auth_header(viewer_tokens["access_token"])
-    )
-
-    assert response.status_code == 403
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 2
+    assert {row["user_email"] for row in body["items"]} == {"viewer@example.com"}
 
 
 @pytest.mark.asyncio
@@ -263,3 +299,122 @@ async def test_analyst_role_can_read_logs(client: AsyncClient, engine):
     )
 
     assert response.status_code == 200
+
+
+# --- per-user scoping (the cross-user leak this feature fixes) ---
+
+
+@pytest.mark.asyncio
+async def test_analyst_sees_only_their_own_decisions_not_other_users(client: AsyncClient, engine):
+    admin_tokens = await _register_and_login(client, "admin@example.com", "adminpass123")
+    analyst_a = await _register_role(client, admin_tokens, "ana-a@example.com", "analyst")
+    analyst_b = await _register_role(client, admin_tokens, "ana-b@example.com", "analyst")
+    await _seed_logs_for_user(engine, analyst_a["id"], analyst_a["email"], count=2)
+    await _seed_logs_for_user(engine, analyst_b["id"], analyst_b["email"], count=4)
+
+    tokens = await _register_and_login(
+        client, "ana-a@example.com", "analystpass123", role="analyst"
+    )
+    response = await client.get("/api/v1/logs", headers=_auth_header(tokens["access_token"]))
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 2
+    assert {row["user_email"] for row in body["items"]} == {"ana-a@example.com"}
+
+
+@pytest.mark.asyncio
+async def test_non_admin_cannot_widen_scope_via_user_id_param(client: AsyncClient, engine):
+    # The ownership filter is server-enforced: passing someone else's
+    # user_id must not expose their rows.
+    admin_tokens = await _register_and_login(client, "admin@example.com", "adminpass123")
+    analyst_a = await _register_role(client, admin_tokens, "ana-a@example.com", "analyst")
+    analyst_b = await _register_role(client, admin_tokens, "ana-b@example.com", "analyst")
+    await _seed_logs_for_user(engine, analyst_a["id"], analyst_a["email"], count=1)
+    await _seed_logs_for_user(engine, analyst_b["id"], analyst_b["email"], count=3)
+
+    tokens = await _register_and_login(
+        client, "ana-a@example.com", "analystpass123", role="analyst"
+    )
+    response = await client.get(
+        "/api/v1/logs",
+        params={"user_id": analyst_b["id"]},
+        headers=_auth_header(tokens["access_token"]),
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    # Still only analyst A's own row — the param was ignored, not honored.
+    assert body["total"] == 1
+    assert {row["user_email"] for row in body["items"]} == {"ana-a@example.com"}
+
+
+@pytest.mark.asyncio
+async def test_admin_sees_all_users_decisions(client: AsyncClient, engine):
+    admin_tokens = await _register_and_login(client, "admin@example.com", "adminpass123")
+    analyst_a = await _register_role(client, admin_tokens, "ana-a@example.com", "analyst")
+    analyst_b = await _register_role(client, admin_tokens, "ana-b@example.com", "analyst")
+    await _seed_logs_for_user(engine, analyst_a["id"], analyst_a["email"], count=2)
+    await _seed_logs_for_user(engine, analyst_b["id"], analyst_b["email"], count=3)
+    await _seed_logs_for_user(engine, None, None, count=1)  # unattributed history
+
+    response = await client.get("/api/v1/logs", headers=_auth_header(admin_tokens["access_token"]))
+
+    assert response.status_code == 200
+    assert response.json()["total"] == 6  # 2 + 3 + 1, everyone's
+
+
+@pytest.mark.asyncio
+async def test_admin_can_filter_by_user_id(client: AsyncClient, engine):
+    admin_tokens = await _register_and_login(client, "admin@example.com", "adminpass123")
+    analyst_a = await _register_role(client, admin_tokens, "ana-a@example.com", "analyst")
+    analyst_b = await _register_role(client, admin_tokens, "ana-b@example.com", "analyst")
+    await _seed_logs_for_user(engine, analyst_a["id"], analyst_a["email"], count=2)
+    await _seed_logs_for_user(engine, analyst_b["id"], analyst_b["email"], count=4)
+
+    response = await client.get(
+        "/api/v1/logs",
+        params={"user_id": analyst_b["id"]},
+        headers=_auth_header(admin_tokens["access_token"]),
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 4
+    assert {row["user_email"] for row in body["items"]} == {"ana-b@example.com"}
+
+
+@pytest.mark.asyncio
+async def test_get_log_by_id_is_404_for_another_users_log(client: AsyncClient, engine):
+    admin_tokens = await _register_and_login(client, "admin@example.com", "adminpass123")
+    owner = await _register_role(client, admin_tokens, "owner@example.com", "analyst")
+    await _register_role(client, admin_tokens, "other@example.com", "analyst")
+    await _seed_logs_for_user(engine, owner["id"], owner["email"], count=1)
+
+    # The single seeded log's id — fetched as its owner (allowed) to learn the id.
+    owner_tokens = await _register_and_login(
+        client, "owner@example.com", "analystpass123", role="analyst"
+    )
+    listed = await client.get("/api/v1/logs", headers=_auth_header(owner_tokens["access_token"]))
+    log_id = listed.json()["items"][0]["id"]
+
+    # Owner can read it.
+    own = await client.get(
+        f"/api/v1/logs/{log_id}", headers=_auth_header(owner_tokens["access_token"])
+    )
+    assert own.status_code == 200
+
+    # A different non-admin gets 404 — existence isn't even confirmed.
+    other_tokens = await _register_and_login(
+        client, "other@example.com", "analystpass123", role="analyst"
+    )
+    forbidden = await client.get(
+        f"/api/v1/logs/{log_id}", headers=_auth_header(other_tokens["access_token"])
+    )
+    assert forbidden.status_code == 404
+
+    # Admin can read anyone's.
+    admin_read = await client.get(
+        f"/api/v1/logs/{log_id}", headers=_auth_header(admin_tokens["access_token"])
+    )
+    assert admin_read.status_code == 200

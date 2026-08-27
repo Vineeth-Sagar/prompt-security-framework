@@ -22,6 +22,19 @@ class DecisionLog(SQLModel, table=True):
 
     id: int | None = Field(default=None, primary_key=True)
     session_id: str = Field(index=True)
+    # Who ran this pipeline call. Both nullable: rows written before this
+    # column existed have no known owner, and run_pipeline() can still be
+    # called with no user (tests, eval scripts, the /api/v1/input path).
+    #
+    # user_id is the authoritative scoping key (indexed — the logs list
+    # for a non-admin filters on it on every request). user_email is a
+    # deliberate denormalized *snapshot*, not a live join: an audit log
+    # should record who acted at the time, so it stays correct even if
+    # the account is later renamed or deleted, and the admin log browser
+    # can show/filter by a human-readable identity without joining users
+    # on every page load.
+    user_id: int | None = Field(default=None, foreign_key="users.id", index=True)
+    user_email: str | None = Field(default=None)
     input_modality: str
     drift_breakdown: dict[str, Any] = Field(sa_column=Column(JSON, nullable=False))
     ifsr_result: dict[str, Any] = Field(sa_column=Column(JSON, nullable=False))

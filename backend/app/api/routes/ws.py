@@ -13,6 +13,8 @@ standard workaround for browser WS auth. Only admin/analyst tokens are
 accepted, same roles as the logs query endpoints.
 """
 
+import json
+
 import redis.asyncio as redis
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, status
 from sqlmodel import select
@@ -71,11 +73,20 @@ async def live_decisions_ws(
 
     await websocket.accept()
 
+    # An admin's live feed shows every user's decisions; an analyst's
+    # shows only their own — the same per-user boundary the logs query
+    # endpoint enforces, so the live view can't leak one user's prompts
+    # to another. Decided once here, before the loop, rather than per
+    # message.
+    is_admin = user.role == UserRole.admin
+
     pubsub = redis_client.pubsub()
     await pubsub.subscribe(LIVE_DECISIONS_CHANNEL)
     try:
         async for message in pubsub.listen():
             if message["type"] != "message":
+                continue
+            if not is_admin and not _event_belongs_to(message["data"], user.id):
                 continue
             try:
                 await websocket.send_text(message["data"])
@@ -87,3 +98,17 @@ async def live_decisions_ws(
     finally:
         await pubsub.unsubscribe(LIVE_DECISIONS_CHANNEL)
         await pubsub.aclose()
+
+
+def _event_belongs_to(raw_event: str, user_id: int) -> bool:
+    """True when the published live event's user_id matches `user_id`.
+
+    Defensive: a malformed payload, or one predating the user_id field,
+    is treated as "not yours" for a non-admin — the safe default for a
+    filter whose job is to *withhold* other users' events, never to leak
+    one on a parse slip.
+    """
+    try:
+        return json.loads(raw_event).get("user_id") == user_id
+    except (ValueError, TypeError):
+        return False

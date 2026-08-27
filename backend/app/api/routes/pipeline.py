@@ -53,7 +53,7 @@ async def run(
     buffer: ContextBuffer = Depends(get_context_buffer),  # noqa: B008
     llm_adapter: BaseLLMAdapter = Depends(get_llm_adapter),  # noqa: B008
     db_session: AsyncSession = Depends(get_session),  # noqa: B008
-    _user: User = Depends(get_current_user),  # noqa: B008
+    user: User = Depends(get_current_user),  # noqa: B008
 ) -> PipelineResult:
     """Run one upload through the full pipeline and return the PipelineResult.
 
@@ -90,6 +90,8 @@ async def run(
             buffer=buffer,
             llm_adapter=llm_adapter,
             db_session=db_session,
+            user_id=user.id,
+            user_email=user.email,
         )
     except ValueError as exc:
         # Handlers raise ValueError for application-level validation

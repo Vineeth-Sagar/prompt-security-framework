@@ -360,3 +360,27 @@ async def test_llm_daily_quota_returns_429_and_says_retrying_wont_help(client, m
     # difference between "the tool is broken" and "only the answer is
     # missing".
     assert "analysed and logged" in detail.lower()
+
+
+@pytest.mark.asyncio
+async def test_pipeline_run_attributes_the_decision_log_to_the_caller(client):
+    # The decision written by a Playground submission must carry the
+    # submitting user's id/email, or per-user log scoping has nothing to
+    # scope on. Verified end-to-end through the logs endpoint rather than
+    # by peeking at the DB, so it also confirms DecisionLogPublic now
+    # surfaces the attribution.
+    ac, _buffer = client
+    token = await _register_and_login(ac, "attrib@example.com", "password123")
+
+    run = await ac.post(
+        "/api/v1/pipeline/run",
+        files={"file": ("prompt.txt", b"what is the capital of France?", "text/plain")},
+        data={"modality": "text", "session_id": "attrib-session"},
+        headers=_auth_header(token),
+    )
+    assert run.status_code == 200
+    log_id = run.json()["log_id"]
+
+    detail = await ac.get(f"/api/v1/logs/{log_id}", headers=_auth_header(token))
+    assert detail.status_code == 200
+    assert detail.json()["user_email"] == "attrib@example.com"

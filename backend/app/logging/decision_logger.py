@@ -30,6 +30,8 @@ async def log_decision(
     result: "PipelineResult",
     session: AsyncSession,
     redis_client: redis.Redis | None = None,
+    user_id: int | None = None,
+    user_email: str | None = None,
 ) -> DecisionLog:
     """Write one DecisionLog row for `result` and publish a compact live-feed event.
 
@@ -39,9 +41,15 @@ async def log_decision(
             pipeline.py passes the same fakeredis instance the session's
             ContextBuffer already uses) so tests/eval scripts don't need
             a real Redis server.
+        user_id, user_email: The user who ran this pipeline call, for
+            per-user log scoping. Both default to None — an unattributed
+            call (tests, eval scripts) is still logged, just without an
+            owner, and is only ever visible to admins.
     """
     log = DecisionLog(
         session_id=result.session_id,
+        user_id=user_id,
+        user_email=user_email,
         input_modality=result.input_result.modality,
         drift_breakdown=result.drift.model_dump(),
         ifsr_result=result.ifsr.model_dump(),
@@ -67,6 +75,12 @@ async def _publish_live_event(log: DecisionLog, redis_client: redis.Redis) -> No
     event = {
         "id": log.id,
         "session_id": log.session_id,
+        # Carried so the WS route can scope the live feed per-user (a
+        # non-admin socket only receives its own events), the same way
+        # the logs query endpoint scopes by user_id. user_email is for
+        # display on the admin dashboard.
+        "user_id": log.user_id,
+        "user_email": log.user_email,
         "input_modality": log.input_modality,
         "policy_action": log.policy_action,
         "matched_rule": log.matched_rule,
