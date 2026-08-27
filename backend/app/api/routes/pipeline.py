@@ -10,6 +10,11 @@ log-reading privileges) submits one modality's worth of input and gets
 back the full `PipelineResult`, the same shape a caller of
 `run_pipeline()` in Python would get.
 
+Target-LLM failures (rate limit, timeout) are mapped to 503/504 with
+an actionable message rather than being allowed to propagate as a bare
+500 — see the `except` clauses in `run()` for why that distinction
+matters to a Playground user.
+
 `session_id` is optional — a one-off Playground submission with no
 session doesn't need multi-turn drift context, so an ephemeral id is
 generated when the caller omits one. Passing a real session_id (e.g.
@@ -28,7 +33,11 @@ from app.auth.security import get_current_user
 from app.context_buffer.redis_buffer import ContextBuffer, get_context_buffer
 from app.db import get_session
 from app.input_layer.router import resolve_modality
-from app.llm_gateway.base import BaseLLMAdapter
+from app.llm_gateway.base import (
+    BaseLLMAdapter,
+    LLMRateLimitExceededError,
+    LLMTimeoutError,
+)
 from app.llm_gateway.factory import get_llm_adapter
 from app.pipeline import PipelineResult, run_pipeline
 
@@ -88,5 +97,29 @@ async def run(
         # handlers may instead raise HTTPException directly for
         # undecodable bytes — that propagates through FastAPI unchanged.
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except LLMRateLimitExceededError as exc:
+        # The target LLM is a third-party dependency, so its transient
+        # failures are *upstream* failures, not bugs in this service —
+        # they deserve a 5xx that says which, plus a message a
+        # Playground user can act on. Previously these propagated
+        # uncaught and FastAPI returned a bare 500 "Internal Server
+        # Error", which reads to a user as "the app is broken" rather
+        # than "the provider throttled us, wait a moment".
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "The target LLM provider rate limit was exceeded (all retries "
+                "exhausted). The prompt was analysed but not answered — wait a "
+                "few seconds and submit again."
+            ),
+        ) from exc
+    except LLMTimeoutError as exc:
+        raise HTTPException(
+            status_code=504,
+            detail=(
+                "The target LLM timed out before responding. The prompt was "
+                "analysed but not answered — please try again."
+            ),
+        ) from exc
 
     return result
