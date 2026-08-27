@@ -1,12 +1,20 @@
 "use client";
 
-import { useId, useState } from "react";
+import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
 import Link from "next/link";
 
 import { RequireAuth } from "@/components/require-auth";
 import { ApiError, runPipeline, runPipelineText } from "@/lib/api-client";
 import type { Modality, PipelineResult, PolicyAction } from "@/lib/types";
+import type { PlaygroundSession } from "@/lib/playground-session";
+import {
+  formatRelativeTime,
+  generateSessionId,
+  recordSubmission,
+  rememberSession,
+  resolveInitialSessionId,
+} from "@/lib/playground-session";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -44,14 +52,17 @@ export default function PlaygroundPage() {
 }
 
 function PlaygroundContent() {
-  // useId() (not crypto.randomUUID()) — this page is statically
-  // prerendered, and useId() is specifically designed to produce the
-  // same value during the server prerender and the client's hydration
-  // pass, where a real random value wouldn't match between the two and
-  // React would discard/re-render the whole tree ("Hydration failed
-  // because the server rendered HTML didn't match the client").
-  const sessionIdSeed = useId();
-  const [sessionId, setSessionId] = useState(() => `playground-${sessionIdSeed}`);
+  // Session id starts as "" — a deterministic value the server
+  // prerender and the client's first render agree on — and is resolved
+  // to the real persisted id inside the mount effect below. Reading
+  // localStorage in a useState initializer would reintroduce the
+  // hydration mismatch this page was fixed for once already (server
+  // renders one value, client renders another, React discards the
+  // tree); see lib/playground-session.ts's docstring for the full
+  // history, including why useId() — the previous fix — was itself
+  // wrong here.
+  const [sessionId, setSessionId] = useState("");
+  const [sessions, setSessions] = useState<PlaygroundSession[]>([]);
   const [modality, setModality] = useState<Modality>("text");
   const [text, setText] = useState("");
   const [file, setFile] = useState<File | null>(null);
@@ -59,9 +70,53 @@ function PlaygroundContent() {
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<PipelineResult | null>(null);
 
+  // Resolve the persisted session on mount (see the sessionId state
+  // comment above for why this can't happen during render). Written as
+  // an async IIFE whose setState calls all follow an await, matching
+  // React's documented resolve-on-mount shape rather than setting state
+  // synchronously in the effect body.
+  useEffect(() => {
+    void (async () => {
+      await Promise.resolve();
+      const initial = resolveInitialSessionId();
+      setSessionId(initial);
+      setSessions(rememberSession(initial));
+    })();
+  }, []);
+
+  // The Select must only ever be handed a value one of its items has,
+  // otherwise a hand-typed id that isn't in history renders as a
+  // silently empty trigger. "" falls back to the placeholder instead.
+  const knownSessionValue = sessions.some((session) => session.id === sessionId)
+    ? sessionId
+    : "";
+
+  function handleSessionChange(next: string) {
+    setSessionId(next);
+    setResult(null);
+  }
+
+  function handleSessionCommit(next: string) {
+    const trimmed = next.trim();
+    if (!trimmed) return;
+    setSessions(rememberSession(trimmed));
+  }
+
+  function handleNewSession() {
+    const fresh = generateSessionId();
+    setSessionId(fresh);
+    setSessions(rememberSession(fresh));
+    setResult(null);
+  }
+
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError(null);
+
+    if (!sessionId.trim()) {
+      setError("Enter a session id (or start a new session) before submitting.");
+      return;
+    }
 
     if (modality !== "text" && !file) {
       setError(`Choose a ${modality} file to upload.`);
@@ -75,6 +130,7 @@ function PlaygroundContent() {
           ? await runPipelineText(text, sessionId)
           : await runPipeline({ file: file as File, filename: (file as File).name, modality, sessionId });
       setResult(response);
+      setSessions(recordSubmission(sessionId));
     } catch (err) {
       if (err instanceof ApiError) {
         setError(String(err.detail ?? err.message));
@@ -108,12 +164,52 @@ function PlaygroundContent() {
         <CardContent>
           <form onSubmit={handleSubmit} className="flex flex-col gap-4">
             <div className="flex flex-col gap-2">
-              <Label htmlFor="session-id">Session ID</Label>
-              <Input
-                id="session-id"
-                value={sessionId}
-                onChange={(event) => setSessionId(event.target.value)}
-              />
+              <div className="flex items-center justify-between gap-2">
+                <Label htmlFor="session-id">Session</Label>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={handleNewSession}
+                  disabled={submitting}
+                >
+                  New session
+                </Button>
+              </div>
+              <div className="flex flex-col gap-2 sm:flex-row">
+                <Input
+                  id="session-id"
+                  className="sm:flex-1"
+                  value={sessionId}
+                  placeholder="Loading session…"
+                  onChange={(event) => handleSessionChange(event.target.value)}
+                  onBlur={(event) => handleSessionCommit(event.target.value)}
+                />
+                {sessions.length > 0 && (
+                  <Select
+                    value={knownSessionValue}
+                    onValueChange={(value) => handleSessionChange(value ?? "")}
+                  >
+                    <SelectTrigger className="w-full sm:w-64" aria-label="Recent sessions">
+                      <SelectValue placeholder="Recent sessions" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {sessions.map((session) => (
+                        <SelectItem key={session.id} value={session.id}>
+                          {session.id} · {session.turnCount} turn
+                          {session.turnCount === 1 ? "" : "s"} ·{" "}
+                          {formatRelativeTime(session.lastUsedAt)}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+              </div>
+              <p className="text-muted-foreground text-xs">
+                Kept across page navigation and reloads — leaving the Playground and coming
+                back resumes this session. Switch with the dropdown, or type any session id
+                (e.g. one copied from the audit log) to resume it.
+              </p>
             </div>
 
             <div className="flex flex-col gap-2">
